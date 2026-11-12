@@ -1,0 +1,15 @@
+# Build artifacts .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+
+# Amostras locais e dados temporários
+amostra/
+amostra_real/
+*.log
+
+# Superset local
+superset/.venv/
+superset/venv/
+*.sqlite
