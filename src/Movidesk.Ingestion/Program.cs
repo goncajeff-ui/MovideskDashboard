@@ -49,8 +49,9 @@ public class Program
             switch (modo)
             {
                 case "historico":
-                    Log.Information("Iniciando modo: CARGA HISTÓRICA COMPLETA");
-                    await ExecutarCargaHistoricaAsync();
+                    int skipInicial = args.Length > 1 && int.TryParse(args[1], out var sk) ? sk : 0;
+                    Log.Information("Iniciando modo: CARGA HISTÓRICA COMPLETA (a partir do ticket {Skip})", skipInicial);
+                    await ExecutarCargaHistoricaAsync(skipInicial);
                     break;
 
                 case "incremental":
@@ -98,11 +99,11 @@ public class Program
         await SalvarTicketsRawAsync(tickets, "API_RECENTE");
     }
 
-    private static async Task ExecutarCargaHistoricaAsync()
+    private static async Task ExecutarCargaHistoricaAsync(int skipInicial = 0)
     {
         Log.Information("--- Fase 1: Tickets ativos / recentes (/tickets) ---");
-        int skip = 0;
-        int totalFase1 = 0;
+        int skip = skipInicial;
+        int totalFase1 = skipInicial;
         while (true)
         {
             await RespeitarRateLimitAsync();
@@ -262,26 +263,59 @@ public class Program
         }
 
         string url = $"{_baseUrl}/{rota}?token={Uri.EscapeDataString(_apiToken)}&{query}";
-        var resp = await _httpClient.GetAsync(url);
 
-        if (!resp.IsSuccessStatusCode)
+        int maxTentativas = 5;
+        for (int tentativa = 1; tentativa <= maxTentativas; tentativa++)
         {
-            var erro = await resp.Content.ReadAsStringAsync();
-            throw new HttpRequestException($"Erro ao consultar /{rota} ({resp.StatusCode}): {erro}");
-        }
-
-        var json = await resp.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        var lista = new List<JsonElement>();
-
-        if (doc.RootElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in doc.RootElement.EnumerateArray())
+            try
             {
-                lista.Add(item.Clone());
+                var resp = await _httpClient.GetAsync(url);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var json = await resp.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    var lista = new List<JsonElement>();
+
+                    if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in doc.RootElement.EnumerateArray())
+                        {
+                            lista.Add(item.Clone());
+                        }
+                    }
+                    return lista;
+                }
+
+                int statusCode = (int)resp.StatusCode;
+                var erro = await resp.Content.ReadAsStringAsync();
+
+                // Trata 503 (banco temporariamente indisponível), 504 (timeout) ou 429 (rate limit)
+                if (statusCode == 503 || statusCode == 504 || statusCode == 429)
+                {
+                    int delaySegundos = 15 * tentativa;
+                    if (resp.Headers.RetryAfter != null && resp.Headers.RetryAfter.Delta.HasValue)
+                    {
+                        delaySegundos = (int)resp.Headers.RetryAfter.Delta.Value.TotalSeconds + 2;
+                    }
+
+                    Log.Warning("API Movidesk retornou {Status} (tentativa {Tentativa}/{Max}). Aguardando {Segundos}s antes de tentar novamente...", 
+                        statusCode, tentativa, maxTentativas, delaySegundos);
+                    
+                    await Task.Delay(TimeSpan.FromSeconds(delaySegundos));
+                    continue;
+                }
+
+                throw new HttpRequestException($"Erro ao consultar /{rota} ({resp.StatusCode}): {erro}");
+            }
+            catch (Exception ex) when (ex is not HttpRequestException || ex.Message.Contains("503"))
+            {
+                if (tentativa == maxTentativas) throw;
+                Log.Warning("Instabilidade de rede/servidor na tentativa {Tentativa}/{Max}: {Msg}. Aguardando 15s...", tentativa, maxTentativas, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(15));
             }
         }
-        return lista;
+
+        throw new HttpRequestException($"Não foi possível obter resposta de /{rota} após {maxTentativas} tentativas devido à sobrecarga no servidor do Movidesk.");
     }
 
     private static async Task SalvarTicketsRawAsync(List<JsonElement> tickets, string fonte)
