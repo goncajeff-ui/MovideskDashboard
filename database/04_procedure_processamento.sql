@@ -156,7 +156,7 @@ BEGIN
                 serviceFirstLevel       NVARCHAR(256),
                 serviceSecondLevel      NVARCHAR(256),
                 serviceThirdLevel       NVARCHAR(256),
-                tags                    NVARCHAR(1000) AS JSON,
+                tags                    NVARCHAR(MAX) AS JSON,
                 createdDate             NVARCHAR(40),
                 lastUpdate              NVARCHAR(40),
                 lastActionDate          NVARCHAR(40),
