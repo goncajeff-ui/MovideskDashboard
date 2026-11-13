@@ -39,9 +39,13 @@ function Executar-SqlScript {
         }
     }
     else {
-        # Fallback usando SqlConnection direto do PowerShell
+        # Fallback usando SqlConnection direto do PowerShell (tenta System.Data ou Microsoft.Data)
         $connString = "Server=$Servidor;Database=$NomeBanco;User Id=$Usuario;Password=$Senha;TrustServerCertificate=True;"
-        $conn = New-Object Microsoft.Data.SqlClient.SqlConnection($connString)
+        try {
+            $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
+        } catch {
+            $conn = New-Object Microsoft.Data.SqlClient.SqlConnection($connString)
+        }
         $conn.Open()
 
         # Divide por GO
