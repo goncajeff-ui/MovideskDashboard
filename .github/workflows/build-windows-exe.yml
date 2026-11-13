@@ -28,9 +28,38 @@ jobs:
         shell: pwsh
         run: dotnet publish src/Movidesk.ControlPanel/Movidesk.ControlPanel.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/MovideskControlPanel
 
+      - name: Ensure wwwroot is present alongside executable and validate bundle
+        shell: pwsh
+        run: |
+          $pubDir = "publish/MovideskControlPanel"
+          $wwwrootDest = Join-Path $pubDir "wwwroot"
+          if (-not (Test-Path (Join-Path $wwwrootDest "index.html"))) {
+            New-Item -ItemType Directory -Path $wwwrootDest -Force | Out-Null
+            Copy-Item -Path "src/Movidesk.ControlPanel/wwwroot/*" -Destination $wwwrootDest -Recurse -Force
+          }
+
+          $required = @(
+            (Join-Path $pubDir "MovideskControlPanel.exe"),
+            (Join-Path $pubDir "appsettings.json"),
+            (Join-Path $wwwrootDest "index.html"),
+            (Join-Path $wwwrootDest "css/app.css")
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) {
+              throw "Arquivo obrigatorio ausente na publicacao: $file"
+            }
+            Write-Host "OK: $file"
+          }
+
       - name: Package ZIP
         shell: pwsh
-        run: Compress-Archive -Path publish/MovideskControlPanel/* -DestinationPath MovideskControlPanel-win-x64.zip -Force
+        run: |
+          Compress-Archive -Path publish/MovideskControlPanel/* -DestinationPath MovideskControlPanel-win-x64.zip -Force
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD/MovideskControlPanel-win-x64.zip")
+          Write-Host "Conteudo do ZIP:"
+          $zip.Entries | ForEach-Object { Write-Host " - $($_.FullName) ($($_.Length) bytes)" }
+          $zip.Dispose()
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -46,7 +75,7 @@ jobs:
           name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} (Windows .exe)
           body: |
             Executável standalone para Windows 10/11 (x64) — não requer PowerShell para abrir.
-            Extraia o ZIP e execute `MovideskControlPanel.exe` (ajuste `appsettings.json` ao lado do `.exe` se necessário).
+            Extraia TODO o conteúdo do ZIP para uma pasta (mantendo `MovideskControlPanel.exe`, `appsettings.json` e a pasta `wwwroot` juntos) e execute `MovideskControlPanel.exe`.
           files: MovideskControlPanel-win-x64.zip
           prerelease: false
           make_latest: true

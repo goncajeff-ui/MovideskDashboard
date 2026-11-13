@@ -13,8 +13,12 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // Prioriza appsettings.json localizado ao lado do .exe (para edição sem recompilar)
+        // Garante que o diretório de trabalho aponte para a pasta do executável
         var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        if (Directory.Exists(exeDir))
+        {
+            Environment.CurrentDirectory = exeDir;
+        }
 
         var configBuilder = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)

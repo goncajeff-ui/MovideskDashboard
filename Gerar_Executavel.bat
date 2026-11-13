@@ -29,6 +29,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if not exist "%OUT_DIR%\wwwroot\index.html" (
+    xcopy "%~dp0src\Movidesk.ControlPanel\wwwroot" "%OUT_DIR%\wwwroot\" /E /I /Y >nul
+)
+
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP_DIR%\Painel Movidesk BI.lnk'); $s.TargetPath = '%OUT_DIR%\MovideskControlPanel.exe'; $s.WorkingDirectory = '%OUT_DIR%'; $s.Description = 'Painel de Controle - Movidesk BI'; $s.Save()"
 
 echo.

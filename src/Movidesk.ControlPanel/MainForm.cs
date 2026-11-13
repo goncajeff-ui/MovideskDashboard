@@ -22,10 +22,12 @@ public sealed class MainForm : Form
         BackColor = Color.FromArgb(11, 17, 32);
         Icon = SystemIcons.Application;
 
+        var hostPagePath = ResolveHostPagePath();
+
         _blazorWebView = new BlazorWebView
         {
             Dock = DockStyle.Fill,
-            HostPage = Path.Combine("wwwroot", "index.html"),
+            HostPage = hostPagePath,
             Services = _serviceProvider
         };
 
@@ -33,6 +35,31 @@ public sealed class MainForm : Form
         Controls.Add(_blazorWebView);
 
         FormClosing += OnMainFormClosing;
+    }
+
+    private static string ResolveHostPagePath()
+    {
+        var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        var candidateExeDir = Path.Combine(exeDir, "wwwroot", "index.html");
+        if (File.Exists(candidateExeDir))
+        {
+            return candidateExeDir;
+        }
+
+        var candidateBaseDir = Path.Combine(AppContext.BaseDirectory, "wwwroot", "index.html");
+        if (File.Exists(candidateBaseDir))
+        {
+            return candidateBaseDir;
+        }
+
+        MessageBox.Show(
+            $"Não foi possível localizar a pasta 'wwwroot\\index.html' ao lado do executável.\n\n" +
+            $"Verifique se a pasta 'wwwroot' foi extraída junto com MovideskControlPanel.exe em:\n{exeDir}",
+            "Arquivos de Interface Ausentes — Movidesk BI",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+
+        return Path.Combine("wwwroot", "index.html");
     }
 
     private void OnMainFormClosing(object? sender, FormClosingEventArgs e)
