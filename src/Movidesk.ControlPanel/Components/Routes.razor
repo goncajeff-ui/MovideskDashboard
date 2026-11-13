@@ -1,0 +1,14 @@
+<Router AppAssembly="typeof(MainForm).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="typeof(MainLayout)">
+            <div class="card">
+                <h2>Página não encontrada</h2>
+                <a href="/" class="btn btn-primary">Voltar ao Painel</a>
+            </div>
+        </LayoutView>
+    </NotFound>
+</Router>

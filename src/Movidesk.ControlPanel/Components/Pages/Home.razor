@@ -1,0 +1,536 @@
+@page "/"
+@inject SupersetService SupersetService
+@inject DatabaseMonitorService DbMonitor
+@inject MovideskIngestionService IngestionService
+@implements IDisposable
+
+<PageTitle>Painel de Controle — Movidesk BI</PageTitle>
+
+<div class="dashboard-wrapper">
+    <!-- Cabeçalho Principal -->
+    <header class="top-header">
+        <div class="brand-block">
+            <div class="brand-icon">BI</div>
+            <div>
+                <h1>Painel de Controle — Movidesk BI</h1>
+                <p class="subtitle">Orquestração de Infraestrutura · Apache Superset (WSL2) · SQL Server (MovideskDM) · API Movidesk</p>
+            </div>
+        </div>
+
+        <div class="header-badges">
+            <span class="badge @GetSupersetBadgeClass()">
+                @if (SupersetService.Status == SupersetStatus.Starting)
+                {
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                }
+                else
+                {
+                    <span class="status-dot" aria-hidden="true"></span>
+                }
+                Superset: @GetSupersetStatusText()
+            </span>
+
+            <span class="badge @(_volumetria?.Conectado == true ? "badge-online" : "badge-error")">
+                <span class="status-dot" aria-hidden="true"></span>
+                MovideskDM: @(_volumetria is null ? "Verificando..." : _volumetria.Conectado ? "Conectado" : "Desconectado")
+            </span>
+        </div>
+    </header>
+
+    <!-- Grid Superior: Launcher Superset + Monitor de Volumetria -->
+    <div class="dashboard-grid">
+        <!-- ===============================================================
+             CARD 1: LAUNCHER DO APACHE SUPERSET (WSL2)
+             =============================================================== -->
+        <section class="card">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <h2>1. Launcher do Apache Superset</h2>
+                    <span class="card-subtitle">Execução silenciosa no Windows via <code>wsl.exe</code> em background</span>
+                </div>
+                <span class="badge @GetSupersetBadgeClass()">
+                    @if (SupersetService.Status == SupersetStatus.Starting)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <span class="status-dot" aria-hidden="true"></span>
+                    }
+                    @GetSupersetStatusText()
+                </span>
+            </div>
+
+            <div class="card-body">
+                <div class="meta-row">
+                    <span class="meta-chip"><strong>Distro:</strong> @SupersetService.WslDistro</span>
+                    <span class="meta-chip"><strong>Venv WSL:</strong> <code>@SupersetService.VenvActivatePath</code></span>
+                    <span class="meta-chip"><strong>Porta:</strong> @SupersetService.Port</span>
+                </div>
+
+                <div class="status-banner @(SupersetService.Status == SupersetStatus.Error ? "status-banner-error" : SupersetService.Status == SupersetStatus.Online ? "status-banner-ok" : "")">
+                    @if (SupersetService.Status == SupersetStatus.Starting)
+                    {
+                        <span class="spinner" aria-hidden="true"></span>
+                    }
+                    <span>@SupersetService.StatusMessage</span>
+                </div>
+
+                <div class="actions-row">
+                    <button type="button"
+                            class="btn btn-primary"
+                            @onclick="IniciarSupersetAsync"
+                            disabled="@(SupersetService.Status == SupersetStatus.Starting || SupersetService.Status == SupersetStatus.Online)">
+                        @if (SupersetService.Status == SupersetStatus.Starting)
+                        {
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                            <span>Subindo servidor...</span>
+                        }
+                        else
+                        {
+                            <span>Iniciar Superset (WSL2)</span>
+                        }
+                    </button>
+
+                    @if (SupersetService.Status == SupersetStatus.Online)
+                    {
+                        <button type="button"
+                                class="btn btn-success"
+                                @onclick="SupersetService.OpenInBrowser">
+                            Abrir Superset ↗
+                        </button>
+                    }
+
+                    <button type="button"
+                            class="btn btn-secondary"
+                            @onclick="VerificarSupersetAsync"
+                            disabled="@_verificandoSuperset">
+                        @(_verificandoSuperset ? "Verificando..." : "Verificar Status")
+                    </button>
+
+                    <button type="button"
+                            class="btn btn-danger"
+                            @onclick="PararSupersetAsync"
+                            disabled="@(SupersetService.Status == SupersetStatus.Offline)">
+                        Parar Superset
+                    </button>
+                </div>
+
+                @{
+                    var supersetLogs = SupersetService.GetLogsSnapshot();
+                }
+                <div class="console-box console-box-compact">
+                    <div class="console-header">
+                        <span>Log WSL / Superset</span>
+                        <span class="muted">@supersetLogs.Count linha(s)</span>
+                    </div>
+                    <div class="console-log">
+                        @if (supersetLogs.Count == 0)
+                        {
+                            <div class="log-empty">Clique em "Iniciar Superset (WSL2)" para subir o servidor na porta @SupersetService.Port.</div>
+                        }
+                        else
+                        {
+                            @foreach (var line in supersetLogs.AsEnumerable().Reverse())
+                            {
+                                <div class="log-line @GetLogCssClass(line)">@line</div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===============================================================
+             CARD 2: MONITOR DE VOLUMETRIA (MSSQL MovideskDM + Dapper)
+             =============================================================== -->
+        <section class="card">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <h2>2. Monitor de Volumetria (MovideskDM)</h2>
+                    <span class="card-subtitle">Contagem em tempo real via Dapper (<code>SELECT COUNT(*) FROM core.Fato_Ticket</code>)</span>
+                </div>
+                <span class="muted timestamp-label">
+                    Atualizado: @(_volumetria?.ConsultadoEm.ToString("HH:mm:ss") ?? "--:--:--")
+                </span>
+            </div>
+
+            <div class="card-body">
+                @if (_volumetria is { Conectado: false })
+                {
+                    <div class="alert-error">
+                        <strong>Falha ao conectar no SQL Server (MovideskDM):</strong>
+                        <span>@_volumetria.MensagemErro</span>
+                        <small>Verifique a ConnectionString no arquivo <code>appsettings.json</code> ao lado do executável.</small>
+                    </div>
+                }
+
+                <div class="metric-hero">
+                    <span class="metric-label">Chamados Importados e Processados no Data Mart</span>
+                    <div class="metric-big">
+                        @if (_volumetria is { Conectado: true })
+                        {
+                            @_volumetria.TotalTicketsCore.ToString("N0")
+                        }
+                        else
+                        {
+                            <span>--</span>
+                        }
+                    </div>
+                    <span class="metric-caption">Tabela <code>core.Fato_Ticket</code> pronta para consulta no Superset</span>
+                </div>
+
+                <div class="sub-metrics-grid">
+                    <div class="mini-metric">
+                        <span class="mini-label">RAW Total (<code>raw.Ticket</code>)</span>
+                        <strong class="mini-value">
+                            @(_volumetria?.Conectado == true ? _volumetria.TotalTicketsRaw.ToString("N0") : "--")
+                        </strong>
+                    </div>
+
+                    <div class="mini-metric @(_volumetria?.Conectado == true && _volumetria.PendentesProcessamento > 0 ? "mini-metric-warn" : "")">
+                        <span class="mini-label">Pendentes RAW → Core</span>
+                        <strong class="mini-value">
+                            @(_volumetria?.Conectado == true ? _volumetria.PendentesProcessamento.ToString("N0") : "--")
+                        </strong>
+                    </div>
+
+                    <div class="mini-metric">
+                        <span class="mini-label">Maior Ticket #ID</span>
+                        <strong class="mini-value">
+                            @(_volumetria?.UltimoTicketId is int ultimoId ? $"#{ultimoId}" : "--")
+                        </strong>
+                    </div>
+
+                    <div class="mini-metric">
+                        <span class="mini-label">Marca d'Água (UTC)</span>
+                        <strong class="mini-value mini-value-sm">
+                            @(_volumetria?.UltimaMarcaDaguaUtc?.ToString("dd/MM/yyyy HH:mm") ?? "--")
+                        </strong>
+                    </div>
+                </div>
+
+                <div class="actions-row actions-between">
+                    <button type="button"
+                            class="btn btn-secondary"
+                            @onclick="() => AtualizarVolumetriaAsync()"
+                            disabled="@_atualizandoVolumetria">
+                        @if (_atualizandoVolumetria)
+                        {
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                            <span>Consultando SQL Server...</span>
+                        }
+                        else
+                        {
+                            <span>Atualizar Agora</span>
+                        }
+                    </button>
+
+                    <label class="checkbox-toggle">
+                        <input type="checkbox" @bind="_autoRefresh" />
+                        <span>Auto-refresh (5s)</span>
+                    </label>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===============================================================
+             CARD 3: ORQUESTRADOR DE CARGA DE DADOS (ANTI-TRAVAMENTO)
+             =============================================================== -->
+        <section class="card card-full">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <h2>3. Orquestrador de Carga de Dados (Anti-Travamento)</h2>
+                    <span class="card-subtitle">Ingestão assíncrona em background (<code>async/await</code> + <code>Task.Run</code>) para nunca congelar o painel</span>
+                </div>
+                <span class="badge @GetIngestionBadgeClass()">
+                    @if (IngestionService.IsRunning)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <span class="status-dot" aria-hidden="true"></span>
+                    }
+                    @IngestionService.CurrentStageLabel
+                </span>
+            </div>
+
+            <div class="card-body">
+                <div class="ingestion-summary-bar">
+                    <div class="summary-item">
+                        <span class="summary-label">Modo Ativo</span>
+                        <strong class="summary-value">@IngestionService.CurrentJobType</strong>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Etapa Atual</span>
+                        <strong class="summary-value">@IngestionService.CurrentStageLabel</strong>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Processados na Execução</span>
+                        <strong class="summary-value">@IngestionService.ProcessedInCurrentRun.ToString("N0") tickets</strong>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Iniciado em</span>
+                        <strong class="summary-value">@(IngestionService.StartedAt?.ToString("HH:mm:ss") ?? "--:--:--")</strong>
+                    </div>
+                </div>
+
+                <div class="controls-row">
+                    <div class="input-group">
+                        <label for="skip-inicial">Skip Inicial (retomada histórica)</label>
+                        <input id="skip-inicial"
+                               type="number"
+                               min="0"
+                               step="50"
+                               class="input-control"
+                               @bind="_skipInicial"
+                               disabled="@IngestionService.IsRunning" />
+                    </div>
+
+                    <div class="actions-row">
+                        <button type="button"
+                                class="btn btn-primary"
+                                @onclick="DispararCargaHistoricaAsync"
+                                disabled="@IngestionService.IsRunning">
+                            @if (IngestionService.IsRunning && IngestionService.CurrentJobType.StartsWith("Carga Histórica", StringComparison.Ordinal))
+                            {
+                                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                                <span>@IngestionService.CurrentStageLabel</span>
+                            }
+                            else
+                            {
+                                <span>Disparar Carga Histórica</span>
+                            }
+                        </button>
+
+                        <button type="button"
+                                class="btn btn-accent"
+                                @onclick="DispararCargaIncrementalAsync"
+                                disabled="@IngestionService.IsRunning">
+                            @if (IngestionService.IsRunning && IngestionService.CurrentJobType == "Carga Incremental")
+                            {
+                                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                                <span>@IngestionService.CurrentStageLabel</span>
+                            }
+                            else
+                            {
+                                <span>Disparar Carga Incremental</span>
+                            }
+                        </button>
+
+                        <button type="button"
+                                class="btn btn-danger"
+                                @onclick="IngestionService.CancelarCarga"
+                                disabled="@(!IngestionService.IsRunning)">
+                            Cancelar Carga
+                        </button>
+
+                        <button type="button"
+                                class="btn btn-ghost"
+                                @onclick="IngestionService.ClearLogs"
+                                disabled="@IngestionService.IsRunning">
+                            Limpar Console
+                        </button>
+                    </div>
+                </div>
+
+                @{
+                    var ingestionLogs = IngestionService.GetLogsSnapshot();
+                }
+                <div class="console-box">
+                    <div class="console-header">
+                        <span>Console de Execução em Tempo Real (mais recentes no topo)</span>
+                        <span class="muted">@ingestionLogs.Count registro(s)</span>
+                    </div>
+                    <div class="console-log">
+                        @if (ingestionLogs.Count == 0)
+                        {
+                            <div class="log-empty">
+                                Nenhuma carga executada nesta sessão. Use "Carga Incremental" para atualizar tickets recentes ou "Carga Histórica" para importar todo o histórico.
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var line in ingestionLogs.AsEnumerable().Reverse())
+                            {
+                                <div class="log-line @GetLogCssClass(line)">@line</div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private VolumetriaSnapshot? _volumetria;
+    private int _skipInicial = 0;
+    private bool _autoRefresh = true;
+    private bool _atualizandoVolumetria;
+    private bool _verificandoSuperset;
+    private bool _disposed;
+    private CancellationTokenSource? _timerCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        SupersetService.OnStateChanged += HandleServiceStateChanged;
+        IngestionService.OnStateChanged += HandleServiceStateChanged;
+
+        await AtualizarVolumetriaAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        await SupersetService.CheckHealthAsync();
+
+        _timerCts = new CancellationTokenSource();
+        _ = RunAutoRefreshLoopAsync(_timerCts.Token);
+    }
+
+    private async Task RunAutoRefreshLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (_autoRefresh)
+                {
+                    await AtualizarVolumetriaAsync(ct);
+                    await SupersetService.CheckHealthAsync(ct);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Encerramento normal ao sair da página
+        }
+    }
+
+    private async Task AtualizarVolumetriaAsync(CancellationToken ct = default)
+    {
+        if (_atualizandoVolumetria || _disposed) return;
+
+        _atualizandoVolumetria = true;
+        await RefreshUiSafelyAsync();
+
+        try
+        {
+            _volumetria = await DbMonitor.GetVolumetriaAsync(ct);
+        }
+        finally
+        {
+            _atualizandoVolumetria = false;
+            await RefreshUiSafelyAsync();
+        }
+    }
+
+    private Task IniciarSupersetAsync() => SupersetService.StartSupersetAsync();
+
+    private Task PararSupersetAsync() => SupersetService.StopSupersetAsync();
+
+    private async Task VerificarSupersetAsync()
+    {
+        if (_verificandoSuperset || _disposed) return;
+
+        _verificandoSuperset = true;
+        await RefreshUiSafelyAsync();
+
+        try
+        {
+            await SupersetService.CheckHealthAsync();
+        }
+        finally
+        {
+            _verificandoSuperset = false;
+            await RefreshUiSafelyAsync();
+        }
+    }
+
+    private async Task DispararCargaHistoricaAsync()
+    {
+        if (IngestionService.IsRunning) return;
+
+        await IngestionService.ExecutarCargaHistoricaAsync(Math.Max(0, _skipInicial));
+        await AtualizarVolumetriaAsync();
+    }
+
+    private async Task DispararCargaIncrementalAsync()
+    {
+        if (IngestionService.IsRunning) return;
+
+        await IngestionService.ExecutarCargaIncrementalAsync();
+        await AtualizarVolumetriaAsync();
+    }
+
+    private void HandleServiceStateChanged()
+    {
+        if (_disposed) return;
+        _ = RefreshUiSafelyAsync();
+    }
+
+    private async Task RefreshUiSafelyAsync()
+    {
+        if (_disposed) return;
+
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Circuito encerrado
+        }
+        catch (InvalidOperationException)
+        {
+            // Renderizador indisponível durante encerramento
+        }
+    }
+
+    private string GetSupersetBadgeClass() => SupersetService.Status switch
+    {
+        SupersetStatus.Online => "badge-online",
+        SupersetStatus.Starting => "badge-starting",
+        SupersetStatus.Error => "badge-error",
+        _ => "badge-offline"
+    };
+
+    private string GetSupersetStatusText() => SupersetService.Status switch
+    {
+        SupersetStatus.Online => "Online",
+        SupersetStatus.Starting => "Subindo servidor...",
+        SupersetStatus.Error => "Erro",
+        _ => "Offline"
+    };
+
+    private string GetIngestionBadgeClass() => IngestionService.CurrentStage switch
+    {
+        IngestionStage.Extracting or IngestionStage.SavingToDatabase or IngestionStage.ProcessingCore => "badge-running",
+        IngestionStage.WaitingRateLimit => "badge-starting",
+        IngestionStage.Completed => "badge-online",
+        IngestionStage.Error => "badge-error",
+        _ => "badge-offline"
+    };
+
+    private static string GetLogCssClass(string line)
+    {
+        if (line.Contains("[OK]", StringComparison.Ordinal)) return "log-ok";
+        if (line.Contains("[WRN]", StringComparison.Ordinal) || line.Contains("[AVISO]", StringComparison.Ordinal)) return "log-wrn";
+        if (line.Contains("[ERR]", StringComparison.Ordinal) || line.Contains("[ERRO]", StringComparison.Ordinal)) return "log-err";
+        if (line.Contains("[INF]", StringComparison.Ordinal)) return "log-inf";
+        return string.Empty;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        SupersetService.OnStateChanged -= HandleServiceStateChanged;
+        IngestionService.OnStateChanged -= HandleServiceStateChanged;
+        _timerCts?.Cancel();
+        _timerCts?.Dispose();
+    }
+}

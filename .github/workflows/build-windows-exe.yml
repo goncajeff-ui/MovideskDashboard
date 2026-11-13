@@ -1,0 +1,52 @@
+name: Build Windows Control Panel (.exe)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/Movidesk.ControlPanel/**'
+      - '.github/workflows/build-windows-exe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish MovideskControlPanel.exe (win-x64 standalone)
+        shell: pwsh
+        run: dotnet publish src/Movidesk.ControlPanel/Movidesk.ControlPanel.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/MovideskControlPanel
+
+      - name: Package ZIP
+        shell: pwsh
+        run: Compress-Archive -Path publish/MovideskControlPanel/* -DestinationPath MovideskControlPanel-win-x64.zip -Force
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MovideskControlPanel-win-x64
+          path: MovideskControlPanel-win-x64.zip
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: control-panel-v1.0.${{ github.run_number }}
+          name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} (Windows .exe)
+          body: |
+            Executável standalone para Windows 10/11 (x64) — não requer PowerShell para abrir.
+            Extraia o ZIP e execute `MovideskControlPanel.exe` (ajuste `appsettings.json` ao lado do `.exe` se necessário).
+          files: MovideskControlPanel-win-x64.zip
+          prerelease: false
+          make_latest: true
