@@ -218,6 +218,13 @@ CREATE TABLE core.Fato_Ticket (
     AtualizadoEm                DATETIME2(0)    NOT NULL CONSTRAINT DF_core_Fato_Ticket_AtualizadoEm DEFAULT SYSDATETIME()
 );
 GO
+
+-- Garante colunas caso a tabela já tenha sido criada em versão anterior
+IF COL_LENGTH('core.Fato_Ticket', 'SlaTempoSolucaoMin') IS NULL
+    ALTER TABLE core.Fato_Ticket ADD SlaTempoSolucaoMin INT NULL;
+IF COL_LENGTH('core.Fato_Ticket', 'SlaTempoRespostaMin') IS NULL
+    ALTER TABLE core.Fato_Ticket ADD SlaTempoRespostaMin INT NULL;
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_StatusBase')
     CREATE INDEX IX_core_Fato_Ticket_StatusBase ON core.Fato_Ticket (StatusBase, Equipe, AgenteId) INCLUDE (SlaDataSolucao, DataCriacao, Urgencia, Status);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_DataCriacao')
