@@ -3,11 +3,13 @@
 """
 Gerador Oficial de Manuais Corporativos em PDF e HTML (Padrão Advice Compliance Solutions)
 ==========================================================================================
-Gera os dois manuais oficiais do ecossistema Movidesk BI:
+Gera os três manuais oficiais do ecossistema Movidesk BI:
   1. Manual_01_Operacao_Painel_Controle_Movidesk_BI (.html e .pdf)
      Título: NOVIDADES DA VERSÃO - Painel de Controle Movidesk BI
   2. Manual_02_Configuracao_Apache_Superset_Corporativo (.html e .pdf)
      Título: MANUAL DE CONFIGURAÇÃO - Apache Superset Corporativo
+  3. Manual_03_Dicionario_de_Dados_MovideskDM (.html e .pdf)
+     Título: MANUAL DE ARQUITETURA - Dicionário de Dados (MovideskDM)
 
 Padrão Visual Corporativo (Referência "CCS - 1 JUD.pdf"):
   - Cores Principais: Azul-Petróleo Escuro (#0B3B52) e Dourado/Mostarda Escuro (#C59217), fundo branco (#FFFFFF).
@@ -15,7 +17,7 @@ Padrão Visual Corporativo (Referência "CCS - 1 JUD.pdf"):
     e o título do manual à direita.
   - Rodapé em todas as páginas: "Advice Compliance Solutions" à esquerda e "Página X de Y" à direita.
   - Tipografia: Open Sans / Arial / Helvetica.
-  - Estrutura: Capa com Título Grande + 4 Destaques (01 a 04) + Índice + Capítulos numerados + Tabelas Zebradas
+  - Estrutura: Capa com Título Grande + Destaques enumerados + Índice + Capítulos numerados + Tabelas Zebradas
     + Espaços cinzas "[INSERIR IMAGEM AQUI: Screenshot da tela X]" já acompanhados das telas reais/ilustradas.
 
 Como executar no Windows ou Linux:
@@ -38,9 +40,9 @@ ROOT_SCREENSHOT = Path("/home/antigravity/image.png")
 
 
 def garantir_recortes_screenshots() -> None:
-    """Se a captura principal existir, gera recortes individuais para os capítulos do Manual 1."""
+    """Se as capturas do Manual 1 ainda não existirem em assets/, gera recortes individuais."""
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    if not ROOT_SCREENSHOT.exists():
+    if (ASSETS_DIR / "tela_01_visao_geral.png").exists() or not ROOT_SCREENSHOT.exists():
         return
     try:
         from PIL import Image
@@ -276,11 +278,17 @@ html, body {
     background: linear-gradient(90deg, #C59217 0%, #e2e8f0 100%);
 }
 
-/* Grid 2x2 dos 4 Destaques */
+/* Grid 2x2 dos 4 Destaques e Grid 3 colunas dos 3 Destaques */
 .highlights-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 3.2mm;
+}
+
+.highlights-grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 2.8mm;
 }
 
 .highlight-card {
@@ -548,6 +556,38 @@ code, .code-inline {
 
 .zebra-table tbody tr:nth-child(odd) {
     background-color: #ffffff;
+}
+
+.steps-container.compact {
+    gap: 1.3mm;
+}
+
+.steps-container.compact .step-row {
+    padding: 1.4mm 2.5mm;
+}
+
+.steps-container.compact .step-text {
+    font-size: 8.1pt;
+    line-height: 1.28;
+}
+
+.zebra-table.compact {
+    font-size: 7.6pt;
+}
+
+.zebra-table.compact thead th {
+    padding: 1.4mm 2.2mm;
+    font-size: 7.6pt;
+}
+
+.zebra-table.compact tbody td {
+    padding: 1.15mm 2.2mm;
+    line-height: 1.26;
+}
+
+.zebra-table.compact code {
+    font-size: 7.4pt;
+    padding: 0.15mm 1.1mm;
 }
 
 .badge-pill {
@@ -1827,6 +1867,419 @@ Connections                   ttl     opn     rt1     rt5     p50     p90
 """
 
 
+def build_manual_3_html() -> str:
+    """Constrói o HTML completo do Manual 3: Dicionário de Dados MovideskDM."""
+    header_right_title = "MANUAL DE ARQUITETURA - Dicionário de Dados"
+    cover_title = "MANUAL DE ARQUITETURA - Dicionário de Dados (MovideskDM)"
+    total_pages = 4
+
+    img_ssms = img_to_data_uri("ssms_arvore_movideskdm.png")
+
+    # -------------------------------------------------------------------------
+    # PÁGINA 1: CAPA + 3 DESTAQUES + ÍNDICE + SCREENSHOT SSMS
+    # -------------------------------------------------------------------------
+    p1 = f"""
+    <div class="cover-banner">
+        <span class="cover-tag">Engenharia de Dados &amp; Business Intelligence · Data Mart Oficial</span>
+        <h1>{cover_title}</h1>
+        <p>Guia de modelagem de dados, arquitetura em camadas (Schemas) e catálogo de Views para o Superset. Documento de referência técnica concebido para orientar analistas de BI e engenheiros na leitura correta da base MovideskDM.</p>
+        <div class="cover-meta-strip">
+            <span><strong>Banco de Dados:</strong> Microsoft SQL Server (MovideskDM)</span>
+            <span><strong>Arquitetura:</strong> Medallion + Star Schema</span>
+            <span><strong>Fuso Oficial:</strong> Brasília (BRT / UTC-3)</span>
+        </div>
+    </div>
+
+    <div class="section-heading-gold">
+        <h2>Destaques da Arquitetura (01 a 03)</h2>
+        <div class="gold-line"></div>
+    </div>
+
+    <div class="highlights-grid-3">
+        <div class="highlight-card">
+            <div class="highlight-num">01</div>
+            <div class="highlight-content">
+                <h3>Arquitetura em Camadas (Medallion)</h3>
+                <p>Isolamento rigoroso entre pouso bruto JSON (<code>raw</code>), modelo estrela limpo (<code>core</code>), auditoria/segurança (<code>ctl</code>/<code>sec</code>) e consumo (<code>mart</code>).</p>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <div class="highlight-num">02</div>
+            <div class="highlight-content">
+                <h3>Modelagem Estrela (Fatos &amp; Dimensões)</h3>
+                <p>Separação clara entre o contexto descritivo — <em>Quem, Quando, Onde, Como</em> (<code>Dim_*</code>) — e os eventos e métricas mensuráveis de SLA (<code>Fato_*</code>).</p>
+            </div>
+        </div>
+        <div class="highlight-card">
+            <div class="highlight-num">03</div>
+            <div class="highlight-content">
+                <h3>Camada Semântica Pronta (Schema mart)</h3>
+                <p>Catálogo de Views analíticas que encapsulam <code>JOINs</code>, conversão para Horário de Brasília e vínculo Empresa vs. Pessoa Física para o Superset.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-heading-gold">
+        <h2>Índice / Conteúdo</h2>
+        <div class="gold-line"></div>
+    </div>
+
+    <div class="toc-box">
+        <ul class="toc-list">
+            <li class="toc-item">
+                <div class="toc-item-left">
+                    <span class="toc-badge">CAPÍTULO 01</span>
+                    <span class="toc-title">A Arquitetura em Camadas (Schemas)</span>
+                    <span class="toc-desc">— Por que não misturar dados: pipeline Medallion (raw, core, ctl, sec e mart)</span>
+                </div>
+                <span class="toc-page">Página 02</span>
+            </li>
+            <li class="toc-item">
+                <div class="toc-item-left">
+                    <span class="toc-badge">CAPÍTULO 02</span>
+                    <span class="toc-title">Lendo as Tabelas de Ingestão (raw) e Negócio (core)</span>
+                    <span class="toc-desc">— Como cruzar Dimensões (Quem/Quando/Onde) e Fatos (Eventos/Números)</span>
+                </div>
+                <span class="toc-page">Página 03</span>
+            </li>
+            <li class="toc-item">
+                <div class="toc-item-left">
+                    <span class="toc-badge">CAPÍTULO 03</span>
+                    <span class="toc-title">A Camada Semântica (As Views do Schema mart)</span>
+                    <span class="toc-desc">— Catálogo oficial de Views analíticas certificadas para o Apache Superset</span>
+                </div>
+                <span class="toc-page">Página 04</span>
+            </li>
+        </ul>
+    </div>
+
+    <div class="screenshot-placeholder-box">
+        <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot do SSMS com a árvore do banco MovideskDM]</div>
+        {f'<div class="screenshot-img-wrapper"><img src="{img_ssms}" style="max-height: 55mm;" alt="Árvore do banco MovideskDM no SSMS" /></div>' if img_ssms else ''}
+        <div class="screenshot-caption">Figura 0.1 — Árvore real do banco MovideskDM no SQL Server Management Studio (SSMS) exibindo as Tabelas (core, ctl, raw, sec) e Exibições (mart.vw_*).</div>
+    </div>
+    """
+
+    # -------------------------------------------------------------------------
+    # PÁGINA 2: CAPÍTULO 01 - A ARQUITETURA EM CAMADAS (SCHEMAS)
+    # -------------------------------------------------------------------------
+    p2 = """
+    <div class="chapter-header">
+        <span class="chapter-badge">Capítulo 01</span>
+        <div class="chapter-title-block">
+            <h2>A Arquitetura em Camadas (Schemas — Medallion Architecture)</h2>
+            <span>Por que o Banco MovideskDM Não Guarda Tudo "Junto e Misturado" em um Único Schema</span>
+        </div>
+    </div>
+
+    <p class="lead-text">
+        Um erro clássico em projetos de BI é jogar o retorno da API diretamente nas mesmas tabelas que os relatórios consultam. Quando a API muda um campo, traz duplicidades ou envia datas em fuso horário universal (<code>UTC</code>), todos os painéis quebram ou exibem números incorretos. Para blindar a operação da Advice, o banco <strong>MovideskDM</strong> adota a <strong>Arquitetura Medalhão (Medallion Architecture)</strong> dividida em 5 schemas especializados:
+    </p>
+
+    <div class="steps-container">
+        <div class="step-row">
+            <div class="step-circle">1</div>
+            <div class="step-text">
+                <strong>Schema <code>raw</code> (Camada Bronze — Área de Pouso Bruta):</strong> Recebe os dados da API do Movidesk exatamente como vêm do JSON original (coluna <code>Payload NVARCHAR(MAX)</code>). Não fazemos filtros nem cálculos aqui. A grande vantagem: se precisarmos criar uma regra nova de negócio amanhã, reprocessamos os 46.850+ chamados direto do <code>raw</code> em segundos, sem precisar baixar tudo de novo da internet!
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">2</div>
+            <div class="step-text">
+                <strong>Schema <code>core</code> (Camada Prata — O "Coração" em Modelo Estrela):</strong> Alimentado pelas procedures <code>core.usp_ProcessarTickets</code> e <code>core.usp_ProcessarPessoas</code>. Aqui o JSON bruto é desmontado, limpo, tipado (<code>INT</code>, <code>DATETIME2</code>, <code>BIT</code>), convertido de <strong>UTC para Horário de Brasília (BRT)</strong> e organizado em <strong>Fatos e Dimensões</strong> para leitura relacional ultrarrápida.
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">3</div>
+            <div class="step-text">
+                <strong>Schemas <code>ctl</code> e <code>sec</code> (Governança, Controle e Segurança):</strong> O schema <code>ctl</code> é o "painel de instrumentos" do motor de carga: guarda o histórico de execuções (<code>ctl.ExecucaoCarga</code>), parâmetros de negócio (<code>ctl.Parametro</code>) e a <strong>"marca d'água"</strong> (<code>ctl.MarcaDagua</code>) que diz ao extrator de qual minuto exato continuar. Já o schema <code>sec</code> controla quem pode ver quais equipes no Superset (<em>Row Level Security</em>).
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">4</div>
+            <div class="step-text">
+                <strong>Schema <code>mart</code> (Camada Ouro — Consumo Analítico / BI):</strong> É a vitrine pronta para consumo. Esconde toda a complexidade de <code>JOINs</code>, regras de SLA e tratamento de nulos dentro de <strong>Views certificadas</strong> (<code>mart.vw_*</code>). É exclusivamente daqui que o Apache Superset lê os dados.
+            </div>
+        </div>
+    </div>
+
+    <table class="zebra-table">
+        <thead>
+            <tr>
+                <th style="width: 15%;">Schema SQL</th>
+                <th style="width: 19%;">Camada Medalhão</th>
+                <th style="width: 28%;">Principais Objetos</th>
+                <th>Papel na Engenharia e Quem Deve Acessar</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><span class="badge-pill badge-gold">raw</span></td>
+                <td><strong>Bronze (Pouso)</strong></td>
+                <td><code>raw.Ticket</code>, <code>raw.Pessoa</code></td>
+                <td>Guarda o JSON intacto da API e a flag <code>Processado (0/1)</code>. <em>Acesso: exclusivo do Extrator C# e procedures de carga.</em></td>
+            </tr>
+            <tr>
+                <td><span class="badge-pill badge-teal">core</span></td>
+                <td><strong>Prata (Coração)</strong></td>
+                <td><code>core.Dim_*</code> (6 tabelas)<br/><code>core.Fato_*</code> (8 tabelas)</td>
+                <td>Modelo Estrela normalizado em Horário de Brasília (BRT) com chaves indexadas. <em>Acesso: Engenheiros de Dados e Views do mart.</em></td>
+            </tr>
+            <tr>
+                <td><span class="badge-pill badge-teal">ctl</span></td>
+                <td><strong>Controle ETL</strong></td>
+                <td><code>ctl.MarcaDagua</code>, <code>ctl.Parametro</code>, <code>ctl.ExecucaoCarga</code></td>
+                <td>Orquestra cursores de retomada, limiares de alerta (4h, 48h, 60d) e logs de auditoria. <em>Acesso: Painel de Controle e DBAs.</em></td>
+            </tr>
+            <tr>
+                <td><span class="badge-pill badge-teal">sec</span></td>
+                <td><strong>Segurança (RLS)</strong></td>
+                <td><code>sec.UsuarioEquipe</code></td>
+                <td>Mapeia qual login do Superset tem permissão para visualizar cada Equipe de suporte. <em>Acesso: Administradores de BI.</em></td>
+            </tr>
+            <tr>
+                <td><span class="badge-pill badge-green">mart</span></td>
+                <td><strong>Ouro (Consumo)</strong></td>
+                <td><code>mart.vw_*</code> (8 Views Analíticas)</td>
+                <td>Camada Semântica pronta para gráficos e relatórios. <strong><em>Acesso: Apache Superset e Analistas de BI.</em></strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout-gold">
+        <strong>Visão do Arquiteto (Fluxo do Dado de Ponta a Ponta):</strong><br/>
+        <code>API Movidesk (JSON UTC)</code> ──► <code>raw.Ticket / raw.Pessoa</code> ──► <code>core.usp_ProcessarTickets (Normaliza + Converte BRT)</code> ──► <code>core.Dim_* + core.Fato_*</code> ──► <code>mart.vw_* (Views Analíticas)</code> ──► <code>Apache Superset (Dashboards)</code>
+    </div>
+    """
+
+    # -------------------------------------------------------------------------
+    # PÁGINA 3: CAPÍTULO 02 - LENDO AS TABELAS DE INGESTÃO (RAW) E NEGÓCIO (CORE)
+    # -------------------------------------------------------------------------
+    p3 = """
+    <div class="chapter-header">
+        <span class="chapter-badge">Capítulo 02</span>
+        <div class="chapter-title-block">
+            <h2>Lendo as Tabelas de Ingestão (raw) e Negócio (core)</h2>
+            <span>Guia Prático do Modelo Estrela: Como Entender e Cruzar Ingestão, Dimensões e Fatos</span>
+        </div>
+    </div>
+
+    <p class="lead-text">
+        Para navegar com segurança pelo banco <strong>MovideskDM</strong>, todo analista de BI precisa dominar a divisão clássica de um <em>Data Warehouse</em> entre <strong>Ingestão Bruta</strong>, <strong>Dimensões</strong> e <strong>Tabelas Fato</strong>:
+    </p>
+
+    <div class="steps-container compact">
+        <div class="step-row">
+            <div class="step-circle">1</div>
+            <div class="step-text">
+                <strong>A Ingestão Bruta (<code>raw.Ticket</code> e <code>raw.Pessoa</code>):</strong> É onde tudo começa. Os dados chegam "sujos" em um grande texto JSON dentro da coluna <code>Payload</code>. Você nunca faz cálculos direto nelas; elas existem para alimentar o <code>core</code> quando <code>Processado = 0</code>.
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">2</div>
+            <div class="step-text">
+                <strong>As Dimensões (<code>core.Dim_*</code> — O "QUEM, QUANDO, ONDE e COMO"):</strong> Guardam os cadastros e características descritivas (textos, nomes, classificações). <em>Exemplo prático:</em> Na tabela de chamados temos apenas o código <code>EmpresaId</code>; se quero exibir o <strong>Nome Fantasia</strong> ou a <strong>Razão Social</strong> do cliente, busco na <code>core.Dim_Cliente</code>. Se quero saber se o status <em>"Aguardando Versão"</em> é dependência de desenvolvimento ou se já encerrou o chamado (<code>EhFinal = 1</code>), busco na <code>core.Dim_Status</code>.
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">3</div>
+            <div class="step-text">
+                <strong>Os Fatos (<code>core.Fato_*</code> — Os "EVENTOS e NÚMEROS"):</strong> Guardam os acontecimentos operacionais, datas, tempos e quantidades. A tabela central <code>core.Fato_Ticket</code> registra cada chamado, seus prazos de SLA, datas de abertura/resolução e faz a ponte (<code>JOIN</code>) com as Dimensões através dos IDs.
+            </div>
+        </div>
+    </div>
+
+    <table class="zebra-table compact">
+        <thead>
+            <tr>
+                <th style="width: 24%;">Tabela no Banco</th>
+                <th style="width: 14%;">Papel</th>
+                <th style="width: 23%;">Chave Primária / JOIN</th>
+                <th>O Que Ela Guarda e Como Ler / Cruzar</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>raw.Ticket</code><br/><code>raw.Pessoa</code></td>
+                <td><span class="badge-pill badge-gold">Ingestão</span></td>
+                <td><code>TicketId</code> (INT)<br/><code>PessoaId</code> (VARCHAR)</td>
+                <td>Guarda o JSON bruto (<code>Payload</code>), data de atualização UTC (<code>LastUpdateUtc</code>) e flag <code>Processado</code>. Origem de todos os dados do <code>core</code>.</td>
+            </tr>
+            <tr>
+                <td><code>core.Dim_Cliente</code></td>
+                <td><span class="badge-pill badge-teal">Dimensão</span></td>
+                <td><code>ClienteId</code><br/>(Auto-join: <code>EmpresaId</code>)</td>
+                <td><strong>QUEM (Cliente/Empresa):</strong> Nome, Razão Social e <code>TipoPessoa</code> (<code>2</code> = Empresa, <code>1</code> = Contato). Contatos apontam para sua empresa via <code>EmpresaId</code>.</td>
+            </tr>
+            <tr>
+                <td><code>core.Dim_Agente</code><br/><code>core.Dim_Equipe</code></td>
+                <td><span class="badge-pill badge-teal">Dimensão</span></td>
+                <td><code>AgenteId</code><br/><code>Nome</code> (Equipe)</td>
+                <td><strong>QUEM ATENDE (Analista e Time):</strong> Nome e e-mail do analista responsável (<code>Dim_Agente</code>) e lista oficial de equipes de suporte (<code>Dim_Equipe</code>).</td>
+            </tr>
+            <tr>
+                <td><code>core.Dim_Status</code></td>
+                <td><span class="badge-pill badge-teal">Dimensão</span></td>
+                <td><code>Nome</code> (Status)</td>
+                <td><strong>COMO ESTÁ:</strong> Traduz cada status do Movidesk em <code>GrupoStatus</code>, flag <code>EhFinal (0/1)</code>, <code>PausaSla</code> e <code>EhDependenciaTerceiro</code>.</td>
+            </tr>
+            <tr>
+                <td><code>core.Dim_Calendario</code></td>
+                <td><span class="badge-pill badge-teal">Dimensão</span></td>
+                <td><code>Data</code> (DATE)</td>
+                <td><strong>QUANDO:</strong> Todos os dias de 2022 a 2028 com <code>AnoMes</code>, <code>NomeDiaSemana</code>, <code>EhFimDeSemana</code>, <code>EhFeriado</code> e <code>EhDiaUtil</code>.</td>
+            </tr>
+            <tr>
+                <td><code>core.Dim_CampoCustomizado</code></td>
+                <td><span class="badge-pill badge-teal">Dimensão</span></td>
+                <td><code>CampoId</code> (INT)</td>
+                <td><strong>METADADO EXTRA:</strong> Dicionário dos campos adicionais de formulário (ex.: <code>133948</code> = Versão do Produto / Release).</td>
+            </tr>
+            <tr>
+                <td><code>core.Fato_Ticket</code></td>
+                <td><span class="badge-pill badge-green">Fato Central</span></td>
+                <td>PK: <code>TicketId</code><br/>FKs: <code>EmpresaId</code>, <code>AgenteId</code>, <code>Status</code>, <code>Equipe</code></td>
+                <td><strong>O CHAMADO:</strong> 1 linha por ticket. Guarda Assunto, Urgência, Categoria, Datas em BRT (Criação, Resolução, Fechamento), prazos de SLA (<code>SlaDataSolucao</code>) e FCR.</td>
+            </tr>
+            <tr>
+                <td><code>core.Fato_StatusHistorico</code></td>
+                <td><span class="badge-pill badge-green">Fato Evento</span></td>
+                <td><code>(TicketId, Sequencia)</code></td>
+                <td><strong>ONDE PAROU:</strong> Cada passagem do chamado por um status, com <code>DataInicio</code>, <code>DataFim</code> e minutos úteis/corridos gastos naquela etapa.</td>
+            </tr>
+            <tr>
+                <td><code>core.Fato_SnapshotBacklog</code></td>
+                <td><span class="badge-pill badge-green">Fato Foto</span></td>
+                <td><code>(DataSnapshot, Equipe, AgenteId, Status, Urgencia)</code></td>
+                <td><strong>MEMÓRIA DA FILA:</strong> Fotografia diária de quantos tickets estavam abertos (<code>QtdTickets</code>) e vencidos (<code>QtdSlaVencido</code>) a cada dia dos últimos 90 dias.</td>
+            </tr>
+            <tr>
+                <td><code>core.Fato_Acao</code><br/><code>core.Fato_CampoCustomizado</code></td>
+                <td><span class="badge-pill badge-green">Fato Detalhe</span></td>
+                <td><code>(TicketId, AcaoId)</code><br/><code>(TicketId, CampoId)</code></td>
+                <td>Interações/ações do chamado (<code>Fato_Acao</code>) e valores preenchidos nos campos customizados do ticket, como a Versão de Release (<code>Fato_CampoCustomizado</code>).</td>
+            </tr>
+        </tbody>
+    </table>
+    """
+
+    # -------------------------------------------------------------------------
+    # PÁGINA 4: CAPÍTULO 03 - A CAMADA SEMÂNTICA (AS VIEWS DO SCHEMA MART)
+    # -------------------------------------------------------------------------
+    p4 = """
+    <div class="chapter-header">
+        <span class="chapter-badge">Capítulo 03</span>
+        <div class="chapter-title-block">
+            <h2>A Camada Semântica (Catálogo de Views do Schema mart)</h2>
+            <span>Por que o Apache Superset e os Analistas Devem Ler Exclusivamente as Views do Schema mart</span>
+        </div>
+    </div>
+
+    <div class="callout-gold" style="padding: 1.8mm 2.8mm; font-size: 8.1pt;">
+        <strong>Regra de Ouro da Arquitetura Advice:</strong> O usuário final e o Apache Superset <strong>JAMAIS devem fazer <code>SELECT</code> diretamente nas tabelas <code>raw</code> ou <code>core</code></strong>. Se um analista consultar <code>core.Fato_Ticket</code> direto sem fazer o <code>LEFT JOIN</code> correto com <code>core.Dim_Status</code> ou sem resolver a hierarquia <code>Contato → Empresa</code> em <code>core.Dim_Cliente</code>, o relatório apresentará números divergentes da Sala de Guerra. Use <strong>sempre</strong> as Views do schema <strong><code>mart</code></strong>, onde todas as regras de negócio já estão mastigadas e padronizadas!
+    </div>
+
+    <div class="steps-container compact">
+        <div class="step-row">
+            <div class="step-circle">1</div>
+            <div class="step-text">
+                <strong>Fila de Hoje e Radar de SLA Iminente (<code>mart.vw_VisaoGeralKpis</code> e <code>mart.vw_SlaRadar</code>):</strong> A <code>vw_VisaoGeralKpis</code> consolida os Big Numbers executivos por Equipe (Backlog Atual, SLA Vencido, SLA Iminente &lt; 4h, Pausados, Dependência Dev, Abertos/Resolvidos Hoje e % FCR). Já a <code>vw_SlaRadar</code> lista cada chamado aberto na fila com seu termômetro preditivo (<code>Vencido</code>, <code>Crítico &lt; 2h</code>, <code>Alerta &lt; 4h</code>, <code>Atenção &lt; 8h</code>) e minutos restantes para vencer.
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">2</div>
+            <div class="step-text">
+                <strong>Envelhecimento da Fila e Gargalos por Status (<code>mart.vw_BacklogAging</code>, <code>mart.vw_StatusAging</code> e <code>mart.vw_BacklogEvolucao</code>):</strong> A <code>vw_BacklogAging</code> classifica os chamados abertos por faixa de idade (<code>0 a 2 dias</code> até <code>Mais de 30 dias</code>) e destaca tickets esquecidos sem interação há mais de 48h. A <code>vw_StatusAging</code> revela em qual status os chamados passam mais horas paradas (incluindo o tempo em curso do status aberto atual), enquanto a <code>vw_BacklogEvolucao</code> desenha a curva histórica dos últimos 90 dias.
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">3</div>
+            <div class="step-text">
+                <strong>Balanço Diário de Vazão (<code>mart.vw_ThroughputDiario</code>):</strong> Cruza a <code>core.Dim_Calendario</code> com as datas de abertura e resolução da <code>core.Fato_Ticket</code>, entregando para cada dia e equipe o total de chamados <code>Abertos</code>, <code>Resolvidos</code> e o <code>SaldoLiquido</code> (se a fila cresceu ou diminuiu no dia).
+            </div>
+        </div>
+        <div class="step-row">
+            <div class="step-circle">4</div>
+            <div class="step-text">
+                <strong>Saúde de Empresas Clientes e Pareto de Demanda (<code>mart.vw_ClienteRaioX</code> e <code>mart.vw_MapaDemanda</code>):</strong> A <code>vw_ClienteRaioX</code> agrupa apenas <strong>Empresas Clientes reais</strong> (ignorando pessoas físicas avulsas já vinculadas), calculando % de SLA cumprido e identificando automaticamente <strong>Clientes Silenciosos há mais de 60 dias (Risco de Churn)</strong>. Por fim, a <code>vw_MapaDemanda</code> cruza Categorias e Urgências com a <strong>Versão do Produto/Release</strong> (<code>CampoId = 133948</code>).
+            </div>
+        </div>
+    </div>
+
+    <table class="zebra-table compact">
+        <thead>
+            <tr>
+                <th style="width: 25%;">View Certificada (Schema mart)</th>
+                <th style="width: 31%;">Tabelas core Cruzadas Internamente</th>
+                <th>Pergunta de Negócio que Ela Responde no Superset</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>mart.vw_VisaoGeralKpis</code></td>
+                <td><code>Fato_Ticket</code> + <code>Dim_Status</code> + <code>ctl.Parametro</code></td>
+                <td><em>"Como está a fotografia instantânea da operação hoje em cada equipe?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_SlaRadar</code></td>
+                <td><code>Fato_Ticket</code> + <code>Dim_Status</code> + <code>Dim_Agente</code> + <code>Dim_Cliente</code> (Empresa)</td>
+                <td><em>"Quais chamados abertos já estouraram ou vão estourar o SLA nas próximas 2h / 4h?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_BacklogAging</code></td>
+                <td><code>Fato_Ticket</code> + <code>Dim_Status</code> + <code>Dim_Agente</code> + <code>Dim_Cliente</code> (Empresa)</td>
+                <td><em>"Há quantos dias cada chamado aberto está na fila e quais estão sem resposta há +48h?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_StatusAging</code></td>
+                <td><code>Fato_StatusHistorico</code> + <code>Fato_Ticket</code> + <code>Dim_Status</code></td>
+                <td><em>"Em qual status do fluxo (Analista, Cliente ou Dev) nossos chamados perdem mais tempo?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_BacklogEvolucao</code></td>
+                <td><code>Fato_SnapshotBacklog</code> + <code>Dim_Calendario</code> + <code>Dim_Status</code> + <code>Dim_Agente</code></td>
+                <td><em>"O nosso backlog total e o volume de SLA vencido estão subindo ou caindo nos últimos 90 dias?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_ThroughputDiario</code></td>
+                <td><code>Dim_Calendario</code> + <code>Dim_Equipe</code> + <code>Fato_Ticket</code> (Abertos/Resolvidos)</td>
+                <td><em>"Estamos resolvendo mais chamados do que entram por dia útil em cada equipe?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_ClienteRaioX</code></td>
+                <td><code>Dim_Cliente</code> (Empresas) + <code>Fato_Ticket</code> + <code>Dim_Status</code></td>
+                <td><em>"Quais Empresas mais demandam suporte, qual o SLA delas e quais pararam de abrir ticket (&gt;60d)?"</em></td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_MapaDemanda</code></td>
+                <td><code>Fato_Ticket</code> + <code>Dim_Status</code> + <code>Fato_CampoCustomizado</code> (<code>133948</code>)</td>
+                <td><em>"Quais categorias e versões de release (KN1, e-Guardian, etc.) concentram mais incidentes?"</em></td>
+            </tr>
+        </tbody>
+    </table>
+    """
+
+    pages_html = (
+        render_page(header_right_title, 1, total_pages, p1)
+        + render_page(header_right_title, 2, total_pages, p2)
+        + render_page(header_right_title, 3, total_pages, p3)
+        + render_page(header_right_title, 4, total_pages, p4)
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8" />
+    <title>{cover_title}</title>
+    <style>{COMMON_CSS}</style>
+</head>
+<body>
+    {pages_html}
+</body>
+</html>
+"""
+
+
 def converter_html_para_pdf(html_path: Path, pdf_path: Path) -> bool:
     """
     Converte um arquivo HTML para PDF A4 utilizando a melhor ferramenta disponível no ambiente:
@@ -1902,6 +2355,10 @@ def main() -> int:
         (
             "Manual_02_Configuracao_Apache_Superset_Corporativo",
             build_manual_2_html(),
+        ),
+        (
+            "Manual_03_Dicionario_de_Dados_MovideskDM",
+            build_manual_3_html(),
         ),
     ]
 

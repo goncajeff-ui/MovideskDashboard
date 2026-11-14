@@ -209,11 +209,17 @@ html, body {
     background: linear-gradient(90deg, #C59217 0%, #e2e8f0 100%);
 }
 
-/* Grid 2x2 dos 4 Destaques */
+/* Grid 2x2 dos 4 Destaques e Grid 3 colunas dos 3 Destaques */
 .highlights-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 3.2mm;
+}
+
+.highlights-grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 2.8mm;
 }
 
 .highlight-card {
@@ -481,6 +487,38 @@ code, .code-inline {
 
 .zebra-table tbody tr:nth-child(odd) {
     background-color: #ffffff;
+}
+
+.steps-container.compact {
+    gap: 1.3mm;
+}
+
+.steps-container.compact .step-row {
+    padding: 1.4mm 2.5mm;
+}
+
+.steps-container.compact .step-text {
+    font-size: 8.1pt;
+    line-height: 1.28;
+}
+
+.zebra-table.compact {
+    font-size: 7.6pt;
+}
+
+.zebra-table.compact thead th {
+    padding: 1.4mm 2.2mm;
+    font-size: 7.6pt;
+}
+
+.zebra-table.compact tbody td {
+    padding: 1.15mm 2.2mm;
+    line-height: 1.26;
+}
+
+.zebra-table.compact code {
+    font-size: 7.4pt;
+    padding: 0.15mm 1.1mm;
 }
 
 .badge-pill {
