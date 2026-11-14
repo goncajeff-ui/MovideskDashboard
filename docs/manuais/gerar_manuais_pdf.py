@@ -2381,7 +2381,7 @@ def build_manual_3_html() -> str:
         ("AgenteId", "VARCHAR(64) NULL", "Código do analista responsável atual pelo chamado (<code>$.owner.id</code>). Faz <code>LEFT JOIN</code> com <code>core.Dim_Agente.AgenteId</code>."),
         ("CriadoPorId", "VARCHAR(64) NULL", "Identificador da pessoa (cliente ou agente) que abriu originalmente o chamado (<code>$.createdBy.id</code>)."),
         ("EmpresaId", "VARCHAR(64) NULL", "Identificador da <strong>Empresa Cliente principal</strong> do chamado. A procedure resolve automaticamente <code>$.clients[0].organization.id</code> ou o vínculo em <code>Dim_Cliente</code> para garantir que aponte para a Pessoa Jurídica."),
-        ("ServicoN1", "NVARCHAR(256) NULL", "Primeiro nível do catálogo de serviços do Movidesk (<code>$.serviceFirstLevel</code>)."),
+        ("ServicoN1", "NVARCHAR(256) NULL", "Primeiro nível do catálogo de serviços do Movidesk — campo <strong>Serviço</strong> na tela do ticket (<code>$.serviceFirstLevel</code>: ex. <code>'EGUARDIAN'</code>). Exposto como <code>Servico</code> nas Views do <code>mart</code>."),
         ("ServicoN2", "NVARCHAR(256) NULL", "Segundo nível do catálogo de serviços do Movidesk (<code>$.serviceSecondLevel</code>)."),
         ("ServicoN3", "NVARCHAR(256) NULL", "Terceiro nível do catálogo de serviços do Movidesk (<code>$.serviceThirdLevel</code>)."),
         ("Tags", "NVARCHAR(1000) NULL", "Arranjo JSON das etiquetas (<em>tags</em>) associadas ao chamado (<code>$.tags</code> truncado em 1.000 caracteres)."),
@@ -2538,6 +2538,7 @@ def build_manual_3_html() -> str:
         ("TicketId", "INT", "Número identificador único do chamado em aberto na fila."),
         ("Protocolo", "NVARCHAR(64)", "Protocolo oficial do chamado no Movidesk para busca rápida."),
         ("Assunto", "NVARCHAR(400)", "Título descritivo do problema reportado no chamado."),
+        ("Servico", "NVARCHAR(256)", "Serviço / Sistema principal do chamado no Movidesk (<code>ISNULL(t.ServicoN1, 'Não Informado')</code>, extraído de <code>$.serviceFirstLevel</code>: ex. <code>'EGUARDIAN'</code>)."),
         ("Categoria / Urgencia", "NVARCHAR(128)", "Categoria funcional e nível de criticidade (Baixa, Média, Alta, Urgente) do ticket."),
         ("Status", "NVARCHAR(128)", "Status atual detalhado em que o chamado se encontra."),
         ("GrupoStatus", "NVARCHAR(60)", "Macro-etapa do status (<code>Com Analista</code>, <code>Aguardando Cliente</code>, <code>Dependência Externa / Dev</code>, etc.)."),
@@ -2571,7 +2572,7 @@ def build_manual_3_html() -> str:
 
     <div class="obj-banner">
         <div><strong>2. mart.vw_SlaRadar</strong> — Termômetro Preditivo de Quebra de SLA da Fila Ativa</div>
-        <span class="obj-meta">Filtro: Somente Chamados em Aberto (EhFinal = 0) · 19 Colunas</span>
+        <span class="obj-meta">Filtro: Somente Chamados em Aberto (EhFinal = 0) · 20 Colunas</span>
     </div>
     {render_dict_table(vw_slaradar_rows, dense=True, col2_label="Tipo SQL")}
     """
@@ -2585,6 +2586,7 @@ def build_manual_3_html() -> str:
         ("Equipe", "NVARCHAR(128)", "Nome da equipe de suporte que detém a posse atual do chamado (<code>ISNULL(t.Equipe, 'Sem Equipe')</code>)."),
         ("Analista", "NVARCHAR(256)", "Nome do analista responsável pelo chamado (via <code>LEFT JOIN core.Dim_Agente</code>)."),
         ("Cliente", "NVARCHAR(256)", "Nome da Empresa Cliente associada ao chamado (resolvendo contato pessoa física para sua respectiva Organização)."),
+        ("Servico", "NVARCHAR(256)", "Serviço / Sistema principal do chamado no Movidesk (<code>ISNULL(t.ServicoN1, 'Não Informado')</code>, extraído de <code>$.serviceFirstLevel</code>: ex. <code>'EGUARDIAN'</code>)."),
         ("Categoria", "NVARCHAR(128)", "Categoria de classificação do chamado."),
         ("Urgencia", "NVARCHAR(128)", "Nível de criticidade operacional atribuído ao chamado."),
         ("Status", "NVARCHAR(128)", "Status atual em que o chamado está estacionado."),
@@ -2619,7 +2621,7 @@ def build_manual_3_html() -> str:
 
     <div class="obj-banner">
         <div><strong>3. mart.vw_BacklogAging</strong> — Envelhecimento da Fila Ativa e Auditoria de Inatividade (+48h)</div>
-        <span class="obj-meta">Filtro: Somente Chamados em Aberto (EhFinal = 0) · 15 Colunas</span>
+        <span class="obj-meta">Filtro: Somente Chamados em Aberto (EhFinal = 0) · 16 Colunas</span>
     </div>
     {render_dict_table(vw_backlogaging_rows, dense=True, col2_label="Tipo SQL")}
 
@@ -2683,12 +2685,13 @@ def build_manual_3_html() -> str:
     # =========================================================================
     vw_mapademanda_rows = [
         ("Equipe", "NVARCHAR(128)", "Nome da equipe de suporte responsável pelo grupo de chamados (<code>ISNULL(t.Equipe, 'Sem Equipe')</code>)."),
-        ("Categoria", "NVARCHAR(128)", "Categoria funcional dos chamados (ex.: Incidente, Dúvida, Requisição)."),
+        ("Servico", "NVARCHAR(256)", "Serviço / Sistema principal do chamado no Movidesk (<code>ISNULL(t.ServicoN1, 'Não Informado')</code>, extraído de <code>$.serviceFirstLevel</code>: ex. <code>'EGUARDIAN'</code>)."),
+        ("Categoria", "NVARCHAR(128)", "Categoria funcional dos chamados (ex.: Suporte, Incidente, Dúvida, Requisição)."),
         ("Urgencia", "NVARCHAR(128)", "Nível de urgência operacional dos chamados no agrupamento."),
         ("VersaoProduto", "NVARCHAR(1000)", "Versão do Produto / Release extraída do campo customizado <code>CampoId = 133948</code> em <code>core.Fato_CampoCustomizado</code> (ex.: <code>'KN1'</code>, <code>'e-Guardian'</code>, <code>'Aquilla'</code>; exibe <code>'Não Informada'</code> quando não preenchido)."),
-        ("Volumetria", "INT", "Quantidade total histórica de chamados registrados naquela combinação de Equipe + Categoria + Urgência + Versão (<code>COUNT(1)</code>)."),
+        ("Volumetria", "INT", "Quantidade total histórica de chamados registrados naquela combinação de Equipe + Serviço + Categoria + Urgência + Versão (<code>COUNT(1)</code>)."),
         ("Abertos", "INT", "Subconjunto da <code>Volumetria</code> que permanece em aberto na fila atual (<code>EhFinal = 0</code>)."),
-        ("HorasMediasResolucao", "DECIMAL(10,1)", "Tempo médio em horas corridas gasto para resolver os chamados daquela categoria/versão (<code>AVG(DATEDIFF(HOUR, DataCriacao, ISNULL(DataResolucao, SYSDATETIME())))</code>)."),
+        ("HorasMediasResolucao", "DECIMAL(10,1)", "Tempo médio em horas corridas gasto para resolver os chamados daquela combinação de serviço/categoria/versão (<code>AVG(DATEDIFF(HOUR, DataCriacao, ISNULL(DataResolucao, SYSDATETIME())))</code>)."),
     ]
 
     vw_backlogevolucao_rows = [
@@ -2717,8 +2720,8 @@ def build_manual_3_html() -> str:
     </div>
 
     <div class="obj-banner">
-        <div><strong>7. mart.vw_MapaDemanda</strong> — Pareto de Categorias, Urgências e Versões de Release (#133948)</div>
-        <span class="obj-meta">Cruzamento: Fato_Ticket + Dim_Status + Fato_CampoCustomizado · 7 Colunas</span>
+        <div><strong>7. mart.vw_MapaDemanda</strong> — Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)</div>
+        <span class="obj-meta">Cruzamento: Fato_Ticket + Dim_Status + Fato_CampoCustomizado · 8 Colunas</span>
     </div>
     {render_dict_table(vw_mapademanda_rows, dense=True, col2_label="Tipo SQL")}
 
@@ -2729,7 +2732,7 @@ def build_manual_3_html() -> str:
     {render_dict_table(vw_backlogevolucao_rows, dense=True, col2_label="Tipo SQL")}
 
     <div class="callout-gold" style="padding: 2mm 3mm; font-size: 8pt;">
-        <strong>Certificação Executiva de Governança (Advice Compliance Solutions):</strong> Este documento reflete fielmente a estrutura física implantada no banco <code>MovideskDM</code> (Release <code>v1.0.5+</code>). Qualquer novo gráfico ou indicador solicitado pela Diretoria no Apache Superset deve obrigatoriamente consumir uma das <strong>8 Views do schema <code>mart</code></strong> documentadas neste capítulo, garantindo 100% de paridade matemática em toda a organização.
+        <strong>Certificação Executiva de Governança (Advice Compliance Solutions):</strong> Este documento reflete fielmente a estrutura física implantada no banco <code>MovideskDM</code> (Release <code>v1.0.7+</code>). Qualquer novo gráfico ou indicador solicitado pela Diretoria no Apache Superset deve obrigatoriamente consumir uma das <strong>8 Views do schema <code>mart</code></strong> documentadas neste capítulo, garantindo 100% de paridade matemática em toda a organização.
     </div>
     """
 

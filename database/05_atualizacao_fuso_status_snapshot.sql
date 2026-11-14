@@ -722,6 +722,7 @@ SELECT
     t.TicketId,
     t.Protocolo,
     t.Assunto,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
     t.Status,
@@ -775,6 +776,7 @@ SELECT
     ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
     t.Status,
@@ -930,6 +932,7 @@ CREATE OR ALTER VIEW mart.vw_MapaDemanda
 AS
 SELECT 
     ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
     ISNULL(cf.Valor, N'Não Informada') AS VersaoProduto,
@@ -939,7 +942,7 @@ SELECT
 FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 LEFT JOIN core.Fato_CampoCustomizado cf ON t.TicketId = cf.TicketId AND cf.CampoId = 133948
-GROUP BY ISNULL(t.Equipe, N'Sem Equipe'), t.Categoria, t.Urgencia, ISNULL(cf.Valor, N'Não Informada');
+GROUP BY ISNULL(t.Equipe, N'Sem Equipe'), ISNULL(t.ServicoN1, N'Não Informado'), t.Categoria, t.Urgencia, ISNULL(cf.Valor, N'Não Informada');
 GO
 
 CREATE OR ALTER VIEW mart.vw_BacklogEvolucao
