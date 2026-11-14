@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/Movidesk.ControlPanel/**'
       - 'database/**'
+      - 'docs/manuais/**'
       - '.github/workflows/build-windows-exe.yml'
   workflow_dispatch:
 
@@ -39,6 +40,12 @@ jobs:
             Copy-Item -Path "src/Movidesk.ControlPanel/wwwroot/*" -Destination $wwwrootDest -Recurse -Force
           }
 
+          $manuaisDest = Join-Path $pubDir "manuais"
+          if (Test-Path "docs/manuais") {
+            New-Item -ItemType Directory -Path $manuaisDest -Force | Out-Null
+            Copy-Item -Path "docs/manuais/*.pdf" -Destination $manuaisDest -Force
+          }
+
           $required = @(
             (Join-Path $pubDir "MovideskControlPanel.exe"),
             (Join-Path $pubDir "appsettings.json"),
@@ -66,17 +73,27 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MovideskControlPanel-win-x64
-          path: MovideskControlPanel-win-x64.zip
+          path: |
+            MovideskControlPanel-win-x64.zip
+            docs/manuais/*.pdf
 
       - name: Publish GitHub Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: control-panel-v1.0.${{ github.run_number }}
-          name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} (Windows .exe)
+          name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} + Manuais Corporativos (PDF)
           body: |
-            Executável standalone para Windows 10/11 (x64) — não requer PowerShell para abrir.
-            Extraia TODO o conteúdo do ZIP para uma pasta (mantendo `MovideskControlPanel.exe`, `appsettings.json` e a pasta `wwwroot` juntos) e execute `MovideskControlPanel.exe`.
-          files: MovideskControlPanel-win-x64.zip
+            ### Pacote Oficial Advice Compliance Solutions — Movidesk BI
+            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com atualização automática do banco `MovideskDM`.
+            - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI.
+            - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset.
+            - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (12 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS` e Catálogo Definitivo das 8 Views `mart`).
+          files: |
+            MovideskControlPanel-win-x64.zip
+            docs/manuais/Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf
+            docs/manuais/Manual_02_Configuracao_Apache_Superset_Corporativo.pdf
+            docs/manuais/Manual_03_Dicionario_de_Dados_Completo.pdf
+            docs/manuais/Manual_03_Dicionario_de_Dados_MovideskDM.pdf
           prerelease: false
           make_latest: true
