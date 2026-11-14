@@ -1,8 +1,116 @@
 /* =============================================================================
-   04 - Procedure de Processamento (RAW -> CORE)
-   Faz o parse do JSON do Movidesk e atualiza fatos e dimensões
+   04 - Procedures de Processamento (RAW -> CORE) e Snapshot Diário de Backlog
+   - Converte timestamps UTC da API para Horário de Brasília (E. South America Standard Time)
+   - Auto-mapeia novos status em core.Dim_Status (Mapeado = 0)
+   - Grava CriadoPorId e Tags em core.Fato_Ticket
+   - Calcula DataFim em core.Fato_StatusHistorico via LEAD()
+   - Popula core.Fato_SnapshotBacklog (histórico de 90 dias + foto do dia)
    ============================================================================= */
 USE [MovideskDM];
+GO
+
+CREATE OR ALTER PROCEDURE core.usp_AtualizarSnapshotBacklog
+    @DiasRetroativos INT = 90,
+    @ReconstruirHistorico BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @Hoje DATE = CAST(SYSDATETIME() AS DATE);
+    DECLARE @DataInicial DATE = DATEADD(DAY, -ISNULL(@DiasRetroativos, 90), @Hoje);
+
+    DECLARE @DiasExistentes INT = (
+        SELECT COUNT(DISTINCT DataSnapshot)
+        FROM core.Fato_SnapshotBacklog
+        WHERE DataSnapshot >= @DataInicial AND DataSnapshot < @Hoje
+    );
+
+    -- Reconstrói os últimos N dias a partir de Fato_Ticket + Fato_StatusHistorico
+    -- quando a tabela está vazia ou quando solicitado (@ReconstruirHistorico = 1)
+    IF @ReconstruirHistorico = 1 OR @DiasExistentes < (@DiasRetroativos / 2)
+    BEGIN
+        DELETE FROM core.Fato_SnapshotBacklog
+        WHERE DataSnapshot >= @DataInicial AND DataSnapshot < @Hoje;
+
+        ;WITH Datas AS (
+            SELECT Data
+            FROM core.Dim_Calendario
+            WHERE Data >= @DataInicial AND Data < @Hoje
+        ),
+        TicketsAbertosNoDia AS (
+            SELECT
+                d.Data AS DataSnapshot,
+                ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+                ISNULL(t.AgenteId, 'NAO_ATRIBUIDO') AS AgenteId,
+                ISNULL(sh.StatusNoDia, ISNULL(t.Status, N'Em atendimento')) AS Status,
+                ISNULL(t.Urgencia, N'Não Informada') AS Urgencia,
+                CASE
+                    WHEN t.SlaDataSolucao IS NOT NULL
+                         AND t.SlaDataSolucao < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+                         AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+                    THEN 1 ELSE 0
+                END AS SlaVencidoNoDia
+            FROM Datas d
+            INNER JOIN core.Fato_Ticket t
+                ON t.DataCriacao < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+               AND (t.DataResolucao IS NULL OR t.DataResolucao >= DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0))))
+               AND (t.DataFechamento IS NULL OR t.DataFechamento >= DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0))))
+            OUTER APPLY (
+                SELECT TOP 1 h.Status AS StatusNoDia
+                FROM core.Fato_StatusHistorico h
+                WHERE h.TicketId = t.TicketId
+                  AND h.DataInicio < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+                ORDER BY h.DataInicio DESC, h.Sequencia DESC
+            ) sh
+            LEFT JOIN core.Dim_Status st
+                ON ISNULL(sh.StatusNoDia, t.Status) = st.Nome
+            WHERE ISNULL(st.EhFinal, 0) = 0
+        )
+        INSERT INTO core.Fato_SnapshotBacklog (
+            DataSnapshot, Equipe, AgenteId, Status, Urgencia, QtdTickets, QtdSlaVencido
+        )
+        SELECT
+            DataSnapshot,
+            Equipe,
+            AgenteId,
+            Status,
+            Urgencia,
+            COUNT(1) AS QtdTickets,
+            SUM(SlaVencidoNoDia) AS QtdSlaVencido
+        FROM TicketsAbertosNoDia
+        GROUP BY DataSnapshot, Equipe, AgenteId, Status, Urgencia;
+    END
+
+    -- Atualiza sempre a foto de HOJE com o estado atual de core.Fato_Ticket
+    DELETE FROM core.Fato_SnapshotBacklog
+    WHERE DataSnapshot = @Hoje;
+
+    INSERT INTO core.Fato_SnapshotBacklog (
+        DataSnapshot, Equipe, AgenteId, Status, Urgencia, QtdTickets, QtdSlaVencido
+    )
+    SELECT
+        @Hoje AS DataSnapshot,
+        ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(t.AgenteId, 'NAO_ATRIBUIDO') AS AgenteId,
+        ISNULL(t.Status, N'Novo') AS Status,
+        ISNULL(t.Urgencia, N'Não Informada') AS Urgencia,
+        COUNT(1) AS QtdTickets,
+        COUNT(CASE
+            WHEN t.SlaDataSolucao IS NOT NULL
+                 AND t.SlaDataSolucao < SYSDATETIME()
+                 AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+            THEN 1
+        END) AS QtdSlaVencido
+    FROM core.Fato_Ticket t
+    LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+    WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+    GROUP BY
+        ISNULL(t.Equipe, N'Sem Equipe'),
+        ISNULL(t.AgenteId, 'NAO_ATRIBUIDO'),
+        ISNULL(t.Status, N'Novo'),
+        ISNULL(t.Urgencia, N'Não Informada');
+END;
 GO
 
 CREATE OR ALTER PROCEDURE core.usp_ProcessarTickets
@@ -45,6 +153,47 @@ BEGIN
         CROSS APPLY OPENJSON(p.Payload) WITH (ownerTeam NVARCHAR(128)) j
         WHERE j.ownerTeam IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM core.Dim_Equipe e WHERE e.Nome = j.ownerTeam);
+
+        /* --------------------------------------------------------------------
+           1b. Auto-cadastra status novos/históricos em Dim_Status (Mapeado = 0)
+               para que nenhum chamado fique com EhFinal NULL nas views
+        -------------------------------------------------------------------- */
+        INSERT INTO core.Dim_Status (
+            Nome, GrupoStatus, OrdemFluxo, PausaSla, EhDependenciaTerceiro, EhFinal, Cor, Mapeado
+        )
+        SELECT
+            s.StatusNome,
+            CASE
+                WHEN s.BaseStatus IN ('Resolved', 'Closed', 'Canceled') THEN N'Encerrado'
+                WHEN s.BaseStatus = 'Stopped' THEN N'Aguardando Cliente'
+                WHEN s.BaseStatus = 'New' THEN N'Fila (Não Iniciado)'
+                ELSE N'Com Analista'
+            END AS GrupoStatus,
+            CASE
+                WHEN s.BaseStatus = 'New' THEN 1
+                WHEN s.BaseStatus = 'Stopped' THEN 3
+                WHEN s.BaseStatus = 'Resolved' THEN 6
+                WHEN s.BaseStatus IN ('Closed', 'Canceled') THEN 7
+                ELSE 2
+            END AS OrdemFluxo,
+            CASE WHEN s.BaseStatus IN ('Stopped', 'Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END AS PausaSla,
+            0 AS EhDependenciaTerceiro,
+            CASE WHEN s.BaseStatus IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END AS EhFinal,
+            '#64748b' AS Cor,
+            0 AS Mapeado
+        FROM (
+            SELECT
+                j.status AS StatusNome,
+                MAX(j.baseStatus) AS BaseStatus
+            FROM #Pendentes p
+            CROSS APPLY OPENJSON(p.Payload) WITH (
+                status     NVARCHAR(128),
+                baseStatus NVARCHAR(40)
+            ) j
+            WHERE j.status IS NOT NULL
+            GROUP BY j.status
+        ) s
+        WHERE NOT EXISTS (SELECT 1 FROM core.Dim_Status d WHERE d.Nome = s.StatusNome);
 
         /* --------------------------------------------------------------------
            2. Atualiza Dim_Agente
@@ -102,6 +251,8 @@ BEGIN
 
         /* --------------------------------------------------------------------
            4. Atualiza core.Fato_Ticket
+              Converte todas as datas UTC da API para Horário de Brasília
+              e persiste também CriadoPorId e Tags
         -------------------------------------------------------------------- */
         MERGE core.Fato_Ticket AS T
         USING (
@@ -123,22 +274,22 @@ BEGIN
                 j.serviceFirstLevel,
                 j.serviceSecondLevel,
                 j.serviceThirdLevel,
-                j.tags,
-                TRY_CONVERT(DATETIME2(0), j.createdDate) AS DataCriacao,
-                TRY_CONVERT(DATETIME2(0), j.lastUpdate) AS DataUltimaAtualizacao,
-                TRY_CONVERT(DATETIME2(0), j.lastActionDate) AS DataUltimaAcao,
-                TRY_CONVERT(DATETIME2(0), j.resolvedIn) AS DataResolucao,
-                TRY_CONVERT(DATETIME2(0), j.closedIn) AS DataFechamento,
-                TRY_CONVERT(DATETIME2(0), j.reopenedIn) AS DataReabertura,
+                LEFT(j.tags, 1000) AS Tags,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.createdDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataCriacao,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.lastUpdate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataUltimaAtualizacao,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.lastActionDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataUltimaAcao,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.resolvedIn, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataResolucao,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.closedIn, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataFechamento,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.reopenedIn, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS DataReabertura,
                 j.actionCount,
                 j.slaAgreement,
                 j.slaAgreementRule,
                 j.slaSolutionTime AS SlaTempoSolucaoMin,
                 j.slaResponseTime AS SlaTempoRespostaMin,
-                TRY_CONVERT(DATETIME2(0), j.slaSolutionDate) AS SlaDataSolucao,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.slaSolutionDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS SlaDataSolucao,
                 j.slaSolutionDateIsPaused,
-                TRY_CONVERT(DATETIME2(0), j.slaResponseDate) AS SlaDataResposta,
-                TRY_CONVERT(DATETIME2(0), j.slaRealResponseDate) AS SlaDataRespostaReal,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.slaResponseDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS SlaDataResposta,
+                CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.slaRealResponseDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)) AS SlaDataRespostaReal,
                 j.resolvedInFirstCall
             FROM #Pendentes p
             CROSS APPLY OPENJSON(p.Payload) WITH (
@@ -196,10 +347,12 @@ BEGIN
                 T.Origem = S.origin,
                 T.Equipe = S.ownerTeam,
                 T.AgenteId = S.ownerId,
+                T.CriadoPorId = ISNULL(S.createdById, T.CriadoPorId),
                 T.EmpresaId = S.EmpresaId,
                 T.ServicoN1 = S.serviceFirstLevel,
                 T.ServicoN2 = S.serviceSecondLevel,
                 T.ServicoN3 = S.serviceThirdLevel,
+                T.Tags = S.Tags,
                 T.DataCriacao = S.DataCriacao,
                 T.DataUltimaAtualizacao = S.DataUltimaAtualizacao,
                 T.DataUltimaAcao = S.DataUltimaAcao,
@@ -220,7 +373,7 @@ BEGIN
         WHEN NOT MATCHED THEN
             INSERT (
                 TicketId, Protocolo, Tipo, Assunto, Categoria, Urgencia, Status, StatusBase,
-                Justificativa, Origem, Equipe, AgenteId, EmpresaId, ServicoN1, ServicoN2, ServicoN3,
+                Justificativa, Origem, Equipe, AgenteId, CriadoPorId, EmpresaId, ServicoN1, ServicoN2, ServicoN3, Tags,
                 DataCriacao, DataUltimaAtualizacao, DataUltimaAcao, DataResolucao, DataFechamento,
                 DataReabertura, QtdAcoes, SlaAcordo, SlaRegra, SlaTempoSolucaoMin, SlaTempoRespostaMin,
                 SlaDataSolucao, SlaSolucaoPausado, SlaDataResposta, SlaDataRespostaReal,
@@ -228,7 +381,7 @@ BEGIN
             )
             VALUES (
                 S.TicketId, S.protocol, S.type, S.subject, S.category, S.urgency, S.status, S.baseStatus,
-                S.justification, S.origin, S.ownerTeam, S.ownerId, S.EmpresaId, S.serviceFirstLevel, S.serviceSecondLevel, S.serviceThirdLevel,
+                S.justification, S.origin, S.ownerTeam, S.ownerId, S.createdById, S.EmpresaId, S.serviceFirstLevel, S.serviceSecondLevel, S.serviceThirdLevel, S.Tags,
                 S.DataCriacao, S.DataUltimaAtualizacao, S.DataUltimaAcao, S.DataResolucao, S.DataFechamento,
                 S.DataReabertura, S.actionCount, S.slaAgreement, S.slaAgreementRule, S.SlaTempoSolucaoMin, S.SlaTempoRespostaMin,
                 S.SlaDataSolucao, S.slaSolutionDateIsPaused, S.SlaDataResposta, S.SlaDataRespostaReal,
@@ -237,31 +390,53 @@ BEGIN
 
         /* --------------------------------------------------------------------
            5. Atualiza core.Fato_StatusHistorico
+              Converte DataInicio para Horário de Brasília e preenche DataFim via LEAD()
         -------------------------------------------------------------------- */
         DELETE h
         FROM core.Fato_StatusHistorico h
         INNER JOIN #Pendentes p ON h.TicketId = p.TicketId;
 
+        ;WITH HistoricoBruto AS (
+            SELECT 
+                p.TicketId,
+                sh.status AS Status,
+                sh.justification AS Justificativa,
+                ISNULL(
+                    CAST(TRY_CONVERT(DATETIME2(0), NULLIF(sh.changedDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0)),
+                    SYSDATETIME()
+                ) AS DataInicio,
+                CAST(ROUND(sh.permanencyTimeFullTime / 60.0, 0) AS INT) AS PermanenciaMinCorridos,
+                CAST(ROUND(sh.permanencyTimeWorkingTime / 60.0, 0) AS INT) AS PermanenciaMinUteis
+            FROM #Pendentes p
+            CROSS APPLY OPENJSON(p.Payload, '$.statusHistories') WITH (
+                status                      NVARCHAR(128),
+                justification               NVARCHAR(256),
+                changedDate                 NVARCHAR(40),
+                permanencyTimeFullTime      FLOAT,
+                permanencyTimeWorkingTime   FLOAT
+            ) sh
+            WHERE sh.status IS NOT NULL
+        ),
+        HistoricoOrdenado AS (
+            SELECT
+                TicketId,
+                ROW_NUMBER() OVER (PARTITION BY TicketId ORDER BY DataInicio) AS Sequencia,
+                Status,
+                Justificativa,
+                DataInicio,
+                LEAD(DataInicio) OVER (PARTITION BY TicketId ORDER BY DataInicio) AS DataFim,
+                PermanenciaMinCorridos,
+                PermanenciaMinUteis
+            FROM HistoricoBruto
+        )
         INSERT INTO core.Fato_StatusHistorico (
-            TicketId, Sequencia, Status, Justificativa, DataInicio,
+            TicketId, Sequencia, Status, Justificativa, DataInicio, DataFim,
             PermanenciaMinCorridos, PermanenciaMinUteis
         )
-        SELECT 
-            p.TicketId,
-            ROW_NUMBER() OVER (PARTITION BY p.TicketId ORDER BY TRY_CONVERT(DATETIME2(0), sh.changedDate)) AS Sequencia,
-            sh.status,
-            sh.justification,
-            ISNULL(TRY_CONVERT(DATETIME2(0), sh.changedDate), SYSDATETIME()) AS DataInicio,
-            CAST(ROUND(sh.permanencyTimeFullTime / 60.0, 0) AS INT) AS PermanenciaMinCorridos,
-            CAST(ROUND(sh.permanencyTimeWorkingTime / 60.0, 0) AS INT) AS PermanenciaMinUteis
-        FROM #Pendentes p
-        CROSS APPLY OPENJSON(p.Payload, '$.statusHistories') WITH (
-            status                      NVARCHAR(128),
-            justification               NVARCHAR(256),
-            changedDate                 NVARCHAR(40),
-            permanencyTimeFullTime      FLOAT,
-            permanencyTimeWorkingTime   FLOAT
-        ) sh;
+        SELECT
+            TicketId, Sequencia, Status, Justificativa, DataInicio, DataFim,
+            PermanenciaMinCorridos, PermanenciaMinUteis
+        FROM HistoricoOrdenado;
 
         /* --------------------------------------------------------------------
            6. Atualiza core.Fato_CampoCustomizado (ex: versão do sistema)
@@ -290,9 +465,16 @@ BEGIN
         FROM raw.Ticket r
         INNER JOIN #Pendentes p ON r.TicketId = p.TicketId;
 
+        /* --------------------------------------------------------------------
+           7. Atualiza core.Fato_SnapshotBacklog
+              Reconstrói os 90 dias se a tabela estiver vazia ou no último lote parcial
+        -------------------------------------------------------------------- */
+        DECLARE @Reconstruir BIT = CASE WHEN @QtdProcessados < 50 THEN 1 ELSE 0 END;
+        EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = @Reconstruir;
+
         UPDATE ctl.ExecucaoCarga
         SET Fim = SYSDATETIME(), Status = 'SUCESSO', QtdRegistros = @QtdProcessados,
-            Mensagem = CONCAT(@QtdProcessados, ' tickets processados do RAW para CORE com sucesso.')
+            Mensagem = CONCAT(@QtdProcessados, ' tickets processados do RAW para CORE (BRT) com sucesso.')
         WHERE ExecucaoId = @ExecucaoId;
 
     END TRY

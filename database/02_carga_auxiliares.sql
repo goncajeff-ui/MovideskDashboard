@@ -93,3 +93,21 @@ ON T.Chave = S.Chave
 WHEN NOT MATCHED THEN
     INSERT (Chave, Valor, Descricao) VALUES (S.Chave, S.Valor, S.Descricao);
 GO
+
+/* ----------------------------------------------------------------------------
+   4. Dicionário de Campos Customizados (core.Dim_CampoCustomizado)
+---------------------------------------------------------------------------- */
+MERGE core.Dim_CampoCustomizado AS T
+USING (VALUES
+    (133948, N'Versão do Produto / Release', N'Versão do sistema informada no chamado (ex.: KN1, e-Guardian, Aquilla)'),
+    (133947, N'Campo Customizado #133947',   N'Campo adicional de formulário de atendimento (regra 67477)'),
+    (129731, N'Campo Customizado #129731',   N'Campo adicional de formulário de atendimento (regra 64915)'),
+    (142628, N'Campo Customizado #142628',   N'Campo adicional de formulário de atendimento (regra 72075)'),
+    (184522, N'Campo Customizado #184522',   N'Campo adicional de formulário de atendimento (regra 94167)')
+) AS S (CampoId, Nome, Descricao)
+ON T.CampoId = S.CampoId
+WHEN MATCHED THEN
+    UPDATE SET T.Nome = S.Nome, T.Descricao = S.Descricao
+WHEN NOT MATCHED THEN
+    INSERT (CampoId, Nome, Descricao) VALUES (S.CampoId, S.Nome, S.Descricao);
+GO
