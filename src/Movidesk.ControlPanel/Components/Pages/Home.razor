@@ -196,16 +196,23 @@
                     </div>
 
                     <div class="mini-metric">
-                        <span class="mini-label">Maior Ticket #ID</span>
-                        <strong class="mini-value">
-                            @(_volumetria?.UltimoTicketId is int ultimoId ? $"#{ultimoId}" : "--")
+                        <span class="mini-label">Faixa de Tickets (#ID)</span>
+                        <strong class="mini-value mini-value-sm">
+                            @if (_volumetria?.MenorTicketId is int minId && _volumetria?.UltimoTicketId is int maxId)
+                            {
+                                @($"#{minId} → #{maxId}")
+                            }
+                            else
+                            {
+                                @("--")
+                            }
                         </strong>
                     </div>
 
                     <div class="mini-metric">
-                        <span class="mini-label">Marca d'Água (UTC)</span>
+                        <span class="mini-label">Fronteira Histórica (UTC)</span>
                         <strong class="mini-value mini-value-sm">
-                            @(_volumetria?.UltimaMarcaDaguaUtc?.ToString("dd/MM/yyyy HH:mm") ?? "--")
+                            @(_volumetria?.FronteiraHistoricaUtc?.ToString("dd/MM/yyyy HH:mm") ?? "--")
                         </strong>
                     </div>
                 </div>
@@ -240,8 +247,8 @@
         <section class="card card-full">
             <div class="card-header">
                 <div class="card-title-group">
-                    <h2>3. Orquestrador de Carga de Dados (Anti-Travamento)</h2>
-                    <span class="card-subtitle">Ingestão assíncrona em background (<code>async/await</code> + <code>Task.Run</code>) para nunca congelar o painel</span>
+                    <h2>3. Orquestrador de Carga de Dados (Retomada Inteligente Anti-Travamento)</h2>
+                    <span class="card-subtitle">Detecta automaticamente os chamados já salvos no banco e continua de onde parou sem repetir lotes</span>
                 </div>
                 <span class="badge @GetIngestionBadgeClass()">
                     @if (IngestionService.IsRunning)
@@ -263,12 +270,20 @@
                         <strong class="summary-value">@IngestionService.CurrentJobType</strong>
                     </div>
                     <div class="summary-item">
-                        <span class="summary-label">Etapa Atual</span>
-                        <strong class="summary-value">@IngestionService.CurrentStageLabel</strong>
+                        <span class="summary-label">Cursor de Retomada</span>
+                        <strong class="summary-value">@IngestionService.CurrentCursorLabel</strong>
                     </div>
                     <div class="summary-item">
-                        <span class="summary-label">Processados na Execução</span>
-                        <strong class="summary-value">@IngestionService.ProcessedInCurrentRun.ToString("N0") tickets</strong>
+                        <span class="summary-label">Novos Inseridos na Sessão</span>
+                        <strong class="summary-value" style="color: #34d399;">
+                            +@IngestionService.NewInsertedInCurrentRun.ToString("N0") novos
+                        </strong>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Lidos da API / Atualizados</span>
+                        <strong class="summary-value">
+                            @IngestionService.ProcessedInCurrentRun.ToString("N0") lidos (@IngestionService.UpdatedInCurrentRun.ToString("N0") atualizados)
+                        </strong>
                     </div>
                     <div class="summary-item">
                         <span class="summary-label">Iniciado em</span>
@@ -277,15 +292,21 @@
                 </div>
 
                 <div class="controls-row">
-                    <div class="input-group">
-                        <label for="skip-inicial">Skip Inicial (retomada histórica)</label>
-                        <input id="skip-inicial"
-                               type="number"
-                               min="0"
-                               step="50"
-                               class="input-control"
-                               @bind="_skipInicial"
-                               disabled="@IngestionService.IsRunning" />
+                    <div class="meta-row">
+                        <span class="meta-chip">
+                            <strong>Retomada Automática:</strong>
+                            @if (_volumetria?.Conectado == true && _volumetria.TotalTicketsRaw > 0 && _volumetria.FronteiraHistoricaUtc.HasValue)
+                            {
+                                <span>
+                                    Pula os <strong>@_volumetria.TotalTicketsRaw.ToString("N0")</strong> tickets já salvos e continua de
+                                    <code>lastUpdate &lt;= @_volumetria.FronteiraHistoricaUtc.Value.ToString("dd/MM/yyyy HH:mm:ss") UTC</code>
+                                </span>
+                            }
+                            else
+                            {
+                                <span>Pronto para iniciar carga completa</span>
+                            }
+                        </span>
                     </div>
 
                     <div class="actions-row">
@@ -297,6 +318,10 @@
                             {
                                 <span class="spinner spinner-sm" aria-hidden="true"></span>
                                 <span>@IngestionService.CurrentStageLabel</span>
+                            }
+                            else if (_volumetria?.TotalTicketsRaw > 0)
+                            {
+                                <span>Retomar Carga Histórica (Automático)</span>
                             }
                             else
                             {
@@ -347,7 +372,7 @@
                         @if (ingestionLogs.Count == 0)
                         {
                             <div class="log-empty">
-                                Nenhuma carga executada nesta sessão. Use "Carga Incremental" para atualizar tickets recentes ou "Carga Histórica" para importar todo o histórico.
+                                Clique em "Retomar Carga Histórica (Automático)" para continuar importando o histórico a partir de onde o banco parou, sem precisar informar skip manual.
                             </div>
                         }
                         else
@@ -366,7 +391,6 @@
 
 @code {
     private VolumetriaSnapshot? _volumetria;
-    private int _skipInicial = 0;
     private bool _autoRefresh = true;
     private bool _atualizandoVolumetria;
     private bool _verificandoSuperset;
@@ -455,7 +479,7 @@
     {
         if (IngestionService.IsRunning) return;
 
-        await IngestionService.ExecutarCargaHistoricaAsync(Math.Max(0, _skipInicial));
+        await IngestionService.ExecutarCargaHistoricaAsync();
         await AtualizarVolumetriaAsync();
     }
 

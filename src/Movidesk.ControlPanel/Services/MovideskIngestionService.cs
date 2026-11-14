@@ -21,6 +21,7 @@ public enum IngestionStage
 /// <summary>
 /// Orquestrador assíncrono de ingestão da API Movidesk -> SQL Server (MovideskDM).
 /// Executa cargas pesadas estritamente em Task.Run no background para nunca travar a UI Blazor.
+/// Possui Retomada Inteligente por Cursor de Data (LastUpdateUtc) para nunca rebaixar chamados já salvos.
 /// </summary>
 public sealed class MovideskIngestionService : IDisposable
 {
@@ -45,6 +46,9 @@ public sealed class MovideskIngestionService : IDisposable
     public string CurrentStageLabel { get; private set; } = "Aguardando comando";
     public string CurrentJobType { get; private set; } = "-";
     public int ProcessedInCurrentRun { get; private set; }
+    public int NewInsertedInCurrentRun { get; private set; }
+    public int UpdatedInCurrentRun { get; private set; }
+    public string CurrentCursorLabel { get; private set; } = "Automático (Banco MovideskDM)";
     public DateTime? StartedAt { get; private set; }
 
     public event Action? OnStateChanged;
@@ -93,7 +97,9 @@ public sealed class MovideskIngestionService : IDisposable
     }
 
     /// <summary>
-    /// Dispara a Carga Histórica Completa em background (Task.Run) com suporte a retomada via skipInicial.
+    /// Dispara ou retoma a Carga Histórica Completa em background (Task.Run).
+    /// Detecta automaticamente os chamados já salvos em raw.Ticket e continua exatamente
+    /// da fronteira histórica (LastUpdateUtc) sem repetir chamados já importados.
     /// </summary>
     public async Task<bool> ExecutarCargaHistoricaAsync(int skipInicial = 0)
     {
@@ -103,8 +109,11 @@ public sealed class MovideskIngestionService : IDisposable
             if (IsRunning) return false;
 
             IsRunning = true;
-            CurrentJobType = $"Carga Histórica (skip={skipInicial})";
+            CurrentJobType = "Carga Histórica (Retomada Inteligente)";
             ProcessedInCurrentRun = 0;
+            NewInsertedInCurrentRun = 0;
+            UpdatedInCurrentRun = 0;
+            CurrentCursorLabel = "Consultando fronteira no banco...";
             StartedAt = DateTime.Now;
             _logs.Clear();
             _cts?.Dispose();
@@ -112,9 +121,9 @@ public sealed class MovideskIngestionService : IDisposable
             token = _cts.Token;
         }
 
-        SetStage(IngestionStage.Extracting, "Extraindo...", $"Iniciando Carga Histórica Completa (skip inicial = {skipInicial})...");
+        SetStage(IngestionStage.Extracting, "Extraindo...", "Iniciando Carga Histórica com Retomada Inteligente pelo banco MovideskDM...");
 
-        // Executa o motor extrator estritamente em Task.Run para jamais bloquear a thread do circuito Blazor
+        // Executa o motor extrator estritamente em Task.Run para jamais bloquear a thread do Blazor
         await Task.Run(async () =>
         {
             int? execucaoId = await RegistrarInicioExecucaoAsync("HISTORICO_PAINEL");
@@ -123,80 +132,245 @@ public sealed class MovideskIngestionService : IDisposable
 
             try
             {
-                AppendLog("[INF] --- Fase 1: Tickets ativos / recentes (/tickets) ---");
-                int skip = Math.Max(0, skipInicial);
-                int totalFase1 = 0;
+                var estadoBanco = await ObterEstadoRetomadaAsync(token);
 
-                while (!token.IsCancellationRequested)
+                if (estadoBanco.TotalRaw > 0 && estadoBanco.CursorRetomadaUtc.HasValue)
                 {
-                    await RespeitarRateLimitAsync(token);
+                    AppendLog($"[INF] Banco MovideskDM já possui {estadoBanco.TotalRaw:N0} chamados salvos.");
+                    AppendLog($"[INF] Fronteira histórica detectada automaticamente: lastUpdate <= {estadoBanco.CursorRetomadaUtc.Value:dd/MM/yyyy HH:mm:ss} UTC.");
 
-                    SetStage(IngestionStage.Extracting, "Extraindo...", $"Extraindo lote /tickets (skip={skip}, top={_batchSize})...");
-                    var tickets = await BuscarTicketsAsync("tickets", _batchSize, skip, "lastUpdate desc", "", token);
-                    if (tickets.Count == 0)
+                    // 1) Sincronização rápida do topo (novos chamados abertos/atualizados hoje após MaiorLastUpdateUtc)
+                    if (estadoBanco.MaiorLastUpdateUtc.HasValue)
                     {
-                        AppendLog("[INF] Fase 1 finalizada (sem mais registros em /tickets).");
-                        break;
+                        var filtroRecente = estadoBanco.MaiorLastUpdateUtc.Value
+                            .AddMinutes(-5)
+                            .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+
+                        AppendLog($"[INF] --- Fase 1 (Delta Rápido): Verificando chamados recentes (lastUpdate >= {filtroRecente}) ---");
+                        int skipDelta = 0;
+                        DateTime? maiorDataDelta = estadoBanco.MaiorLastUpdateUtc;
+
+                        while (!token.IsCancellationRequested)
+                        {
+                            await RespeitarRateLimitAsync(token);
+
+                            SetStage(IngestionStage.Extracting, "Extraindo...", $"Sincronizando topo recente /tickets (skip={skipDelta})...");
+                            var recentes = await BuscarTicketsAsync("tickets", _batchSize, skipDelta, "lastUpdate asc", $"lastUpdate ge {filtroRecente}", token);
+                            if (recentes.Count == 0) break;
+
+                            SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {recentes.Count} tickets recentes em raw.Ticket...");
+                            var (ins, upd) = await SalvarTicketsRawAsync(recentes, "API_HISTORICO", token);
+
+                            if (ins > 0 || upd > 0)
+                            {
+                                SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
+                                await ExecutarProcessamentoCoreAsync(token);
+                            }
+
+                            RegistrarEstatisticasLote(recentes.Count, ins, upd);
+                            AppendLog($"[OK] Fase 1 (Delta): +{ins} novos inseridos, {upd} atualizados.");
+
+                            foreach (var t in recentes)
+                            {
+                                if (t.TryGetProperty("lastUpdate", out var lu) && lu.TryGetDateTime(out var dt))
+                                {
+                                    if (!maiorDataDelta.HasValue || dt > maiorDataDelta.Value)
+                                        maiorDataDelta = dt;
+                                }
+                            }
+
+                            if (recentes.Count < _batchSize) break;
+                            skipDelta += _batchSize;
+                        }
+
+                        if (maiorDataDelta.HasValue)
+                        {
+                            await AtualizarMarcaDaguaAsync("TICKETS", maiorDataDelta.Value, token);
+                        }
+                    }
+                }
+                else
+                {
+                    // Banco totalmente vazio: Fase 1 carrega os chamados ativos/recentes (últimos 90 dias)
+                    AppendLog("[INF] Banco vazio. --- Fase 1: Carregando chamados recentes (/tickets) ---");
+                    int skip = Math.Max(0, skipInicial);
+                    DateTime? maiorDataFase1 = null;
+
+                    while (!token.IsCancellationRequested)
+                    {
+                        await RespeitarRateLimitAsync(token);
+
+                        SetStage(IngestionStage.Extracting, "Extraindo...", $"Extraindo lote /tickets (skip={skip}, top={_batchSize})...");
+                        var tickets = await BuscarTicketsAsync("tickets", _batchSize, skip, "lastUpdate desc", "", token);
+                        if (tickets.Count == 0)
+                        {
+                            AppendLog("[INF] Fase 1 finalizada (sem mais registros em /tickets).");
+                            break;
+                        }
+
+                        SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {tickets.Count} tickets na tabela raw.Ticket...");
+                        var (ins, upd) = await SalvarTicketsRawAsync(tickets, "API_HISTORICO", token);
+
+                        if (ins > 0 || upd > 0)
+                        {
+                            SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
+                            await ExecutarProcessamentoCoreAsync(token);
+                        }
+
+                        foreach (var t in tickets)
+                        {
+                            if (t.TryGetProperty("lastUpdate", out var lu) && lu.TryGetDateTime(out var dt))
+                            {
+                                if (!maiorDataFase1.HasValue || dt > maiorDataFase1.Value)
+                                    maiorDataFase1 = dt;
+                            }
+                        }
+
+                        skip += _batchSize;
+                        RegistrarEstatisticasLote(tickets.Count, ins, upd);
+                        AppendLog($"[OK] Fase 1: +{ins} novos inseridos ({upd} já existiam) | Sessão: +{NewInsertedInCurrentRun:N0} novos.");
+
+                        if (tickets.Count < _batchSize)
+                        {
+                            AppendLog("[INF] Último lote parcial da Fase 1 alcançado.");
+                            break;
+                        }
                     }
 
-                    SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {tickets.Count} tickets na tabela raw.Ticket...");
-                    await SalvarTicketsRawAsync(tickets, "API_HISTORICO", token);
-
-                    SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
-                    await ExecutarProcessamentoCoreAsync(token);
-
-                    totalFase1 += tickets.Count;
-                    skip += _batchSize;
-                    AtualizarContagem(totalFase1);
-                    AppendLog($"[OK] Fase 1: +{tickets.Count} tickets salvos e processados (total acumulado nesta execução: {totalFase1}).");
-
-                    if (tickets.Count < _batchSize)
+                    if (maiorDataFase1.HasValue)
                     {
-                        AppendLog("[INF] Último lote parcial da Fase 1 alcançado.");
-                        break;
+                        await AtualizarMarcaDaguaAsync("TICKETS", maiorDataFase1.Value, token);
                     }
+
+                    estadoBanco = await ObterEstadoRetomadaAsync(token);
                 }
 
                 token.ThrowIfCancellationRequested();
 
-                AppendLog("[INF] --- Fase 2: Tickets históricos antigos (/tickets/past) ---");
-                skip = 0;
-                int totalFase2 = 0;
+                // =========================================================================
+                // FASE 2: HISTÓRICO COMPLETO (/tickets/past) COM CURSOR DE DATA REGRESSIVO
+                // Usa $orderby=lastUpdate desc e $filter=lastUpdate le {cursorUtc} com $skip=0,
+                // pulando instantaneamente todos os chamados já carregados no banco!
+                // =========================================================================
+                DateTime cursorFiltroUtc = estadoBanco.CursorRetomadaUtc.HasValue
+                    ? CeilToSecond(estadoBanco.CursorRetomadaUtc.Value)
+                    : CeilToSecond(DateTime.UtcNow);
+
+                int skipNoCursor = 0;
+                int lotesSemNovosNoMesmoSegundo = 0;
+
+                AppendLog($"[INF] --- Fase 2: Carga Histórica em /tickets/past a partir de {cursorFiltroUtc:dd/MM/yyyy HH:mm:ss} UTC (para trás) ---");
 
                 while (!token.IsCancellationRequested)
                 {
                     await RespeitarRateLimitAsync(token);
 
-                    SetStage(IngestionStage.Extracting, "Extraindo...", $"Extraindo lote /tickets/past (skip={skip}, top={_batchSize})...");
-                    var tickets = await BuscarTicketsAsync("tickets/past", _batchSize, skip, "createdDate desc", "", token);
+                    string dataFiltroStr = cursorFiltroUtc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+                    string filterPast = $"lastUpdate le {dataFiltroStr}";
+                    AtualizarCursorLabel($"lastUpdate <= {cursorFiltroUtc:dd/MM/yyyy HH:mm:ss} UTC");
+
+                    SetStage(
+                        IngestionStage.Extracting,
+                        "Extraindo...",
+                        $"Extraindo /tickets/past (lastUpdate <= {dataFiltroStr}, skip={skipNoCursor}, top={_batchSize})...");
+
+                    var tickets = await BuscarTicketsAsync("tickets/past", _batchSize, skipNoCursor, "lastUpdate desc", filterPast, token);
                     if (tickets.Count == 0)
                     {
-                        AppendLog("[INF] Fase 2 finalizada (sem mais registros em /tickets/past).");
+                        AppendLog("[INF] Fase 2 finalizada! Todo o histórico de /tickets/past foi importado.");
                         break;
                     }
 
                     SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {tickets.Count} tickets históricos na tabela raw.Ticket...");
-                    await SalvarTicketsRawAsync(tickets, "API_PAST", token);
+                    var (inseridos, atualizados) = await SalvarTicketsRawAsync(tickets, "API_PAST", token);
 
-                    SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
-                    await ExecutarProcessamentoCoreAsync(token);
+                    if (inseridos > 0 || atualizados > 0)
+                    {
+                        SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
+                        await ExecutarProcessamentoCoreAsync(token);
+                    }
 
-                    totalFase2 += tickets.Count;
-                    skip += _batchSize;
-                    AtualizarContagem(totalFase1 + totalFase2);
-                    AppendLog($"[OK] Fase 2: +{tickets.Count} tickets históricos salvos (total geral nesta execução: {totalFase1 + totalFase2}).");
+                    RegistrarEstatisticasLote(tickets.Count, inseridos, atualizados);
 
-                    if (tickets.Count < _batchSize) break;
+                    DateTime? menorDataLote = null;
+                    int? menorIdLote = null;
+                    foreach (var t in tickets)
+                    {
+                        if (t.TryGetProperty("id", out var idProp) && idProp.TryGetInt32(out var tid))
+                        {
+                            if (!menorIdLote.HasValue || tid < menorIdLote.Value)
+                                menorIdLote = tid;
+                        }
+
+                        if (t.TryGetProperty("lastUpdate", out var lu) && lu.TryGetDateTime(out var dt))
+                        {
+                            if (!menorDataLote.HasValue || dt < menorDataLote.Value)
+                                menorDataLote = dt;
+                        }
+                        else if (t.TryGetProperty("createdDate", out var cd) && cd.TryGetDateTime(out var cdt))
+                        {
+                            if (!menorDataLote.HasValue || cdt < menorDataLote.Value)
+                                menorDataLote = cdt;
+                        }
+                    }
+
+                    AppendLog(
+                        $"[OK] Fase 2: +{inseridos} NOVOS inseridos, {atualizados} atualizados " +
+                        $"(Menor ID lote: #{menorIdLote?.ToString() ?? "-"} | Data cursor: {menorDataLote:dd/MM/yyyy HH:mm} | Acumulado novos na sessão: +{NewInsertedInCurrentRun:N0}).");
+
+                    if (tickets.Count < _batchSize)
+                    {
+                        AppendLog("[INF] Último lote histórico alcançado em /tickets/past!");
+                        break;
+                    }
+
+                    // Avança o cursor de data para o chamado mais antigo do lote atual
+                    if (menorDataLote.HasValue)
+                    {
+                        var novoCursorUtc = CeilToSecond(menorDataLote.Value);
+                        if (novoCursorUtc < cursorFiltroUtc)
+                        {
+                            cursorFiltroUtc = novoCursorUtc;
+                            skipNoCursor = 0;
+                            lotesSemNovosNoMesmoSegundo = 0;
+                        }
+                        else
+                        {
+                            // Todos os 50 chamados do lote caíram no mesmo segundo exato
+                            skipNoCursor += _batchSize;
+                            if (inseridos == 0)
+                            {
+                                lotesSemNovosNoMesmoSegundo++;
+                                if (lotesSemNovosNoMesmoSegundo >= 2)
+                                {
+                                    cursorFiltroUtc = cursorFiltroUtc.AddSeconds(-1);
+                                    skipNoCursor = 0;
+                                    lotesSemNovosNoMesmoSegundo = 0;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        skipNoCursor += _batchSize;
+                    }
                 }
 
                 token.ThrowIfCancellationRequested();
-                SetStage(IngestionStage.Completed, "Concluído", $"Carga Histórica concluída! Total processado nesta execução: {ProcessedInCurrentRun} tickets.");
+                AtualizarCursorLabel("Histórico Completo Sincronizado");
+                SetStage(
+                    IngestionStage.Completed,
+                    "Concluído",
+                    $"Carga Histórica concluída! +{NewInsertedInCurrentRun:N0} novos chamados inseridos ({ProcessedInCurrentRun:N0} lidos no total).");
             }
             catch (OperationCanceledException)
             {
                 statusFinal = "CANCELADO";
                 msgFinal = "Interrompida pelo usuário.";
-                SetStage(IngestionStage.Cancelled, "Cancelado", $"Carga Histórica cancelada pelo operador. {ProcessedInCurrentRun} tickets salvos até a parada.");
+                SetStage(
+                    IngestionStage.Cancelled,
+                    "Cancelado",
+                    $"Carga Histórica pausada pelo operador. +{NewInsertedInCurrentRun:N0} novos chamados foram salvos no banco e a próxima execução retomará automaticamente deste ponto.");
             }
             catch (Exception ex)
             {
@@ -206,7 +380,7 @@ public sealed class MovideskIngestionService : IDisposable
             }
             finally
             {
-                await RegistrarFimExecucaoAsync(execucaoId, statusFinal, ProcessedInCurrentRun, msgFinal);
+                await RegistrarFimExecucaoAsync(execucaoId, statusFinal, NewInsertedInCurrentRun, msgFinal);
                 FinalizarEstadoExecucao();
             }
         });
@@ -227,6 +401,9 @@ public sealed class MovideskIngestionService : IDisposable
             IsRunning = true;
             CurrentJobType = "Carga Incremental";
             ProcessedInCurrentRun = 0;
+            NewInsertedInCurrentRun = 0;
+            UpdatedInCurrentRun = 0;
+            CurrentCursorLabel = "Marca d'Água (ctl.MarcaDagua)";
             StartedAt = DateTime.Now;
             _logs.Clear();
             _cts?.Dispose();
@@ -245,12 +422,18 @@ public sealed class MovideskIngestionService : IDisposable
             try
             {
                 var ultimaData = await ObterUltimaMarcaDaguaAsync("TICKETS", token);
-                string filter = "";
+                if (!ultimaData.HasValue)
+                {
+                    var estado = await ObterEstadoRetomadaAsync(token);
+                    ultimaData = estado.MaiorLastUpdateUtc;
+                }
 
+                string filter = "";
                 if (ultimaData.HasValue)
                 {
                     var dataFiltro = ultimaData.Value.AddMinutes(-10).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
                     filter = $"lastUpdate ge {dataFiltro}";
+                    AtualizarCursorLabel($"lastUpdate >= {ultimaData.Value.AddMinutes(-10):dd/MM/yyyy HH:mm} UTC");
                     AppendLog($"[INF] Marca d'água encontrada. Buscando tickets com lastUpdate >= {dataFiltro}...");
                 }
                 else
@@ -271,10 +454,10 @@ public sealed class MovideskIngestionService : IDisposable
                     if (tickets.Count == 0) break;
 
                     SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {tickets.Count} tickets atualizados no banco MovideskDM...");
-                    await SalvarTicketsRawAsync(tickets, "API_INCREMENTAL", token);
+                    var (ins, upd) = await SalvarTicketsRawAsync(tickets, "API_INCREMENTAL", token);
 
                     totalCiclo += tickets.Count;
-                    AtualizarContagem(totalCiclo);
+                    RegistrarEstatisticasLote(tickets.Count, ins, upd);
 
                     foreach (var t in tickets)
                     {
@@ -285,7 +468,7 @@ public sealed class MovideskIngestionService : IDisposable
                         }
                     }
 
-                    AppendLog($"[OK] Lote incremental salvo ({tickets.Count} tickets).");
+                    AppendLog($"[OK] Lote incremental salvo (+{ins} novos, {upd} atualizados).");
 
                     if (tickets.Count < _batchSize) break;
                     skip += _batchSize;
@@ -305,7 +488,10 @@ public sealed class MovideskIngestionService : IDisposable
                     }
 
                     token.ThrowIfCancellationRequested();
-                    SetStage(IngestionStage.Completed, "Concluído", $"Carga Incremental concluída! {totalCiclo} ticket(s) sincronizado(s).");
+                    SetStage(
+                        IngestionStage.Completed,
+                        "Concluído",
+                        $"Carga Incremental concluída! +{NewInsertedInCurrentRun:N0} novos, {UpdatedInCurrentRun:N0} atualizados.");
                 }
                 else
                 {
@@ -332,6 +518,51 @@ public sealed class MovideskIngestionService : IDisposable
         });
 
         return true;
+    }
+
+    private static DateTime CeilToSecond(DateTime dt)
+    {
+        var truncated = new DateTime(dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, dt.Second, DateTimeKind.Utc);
+        return dt.Millisecond > 0 || dt.Ticks % TimeSpan.TicksPerSecond != 0
+            ? truncated.AddSeconds(1)
+            : truncated;
+    }
+
+    private async Task<(int TotalRaw, DateTime? MaiorLastUpdateUtc, DateTime? CursorRetomadaUtc)> ObterEstadoRetomadaAsync(CancellationToken ct)
+    {
+        const string sql = @"
+            SELECT
+                COUNT(*) AS TotalRaw,
+                MAX(LastUpdateUtc) AS MaiorLastUpdateUtc,
+                (
+                    SELECT TOP 1 LastUpdateUtc
+                    FROM (
+                        SELECT
+                            LastUpdateUtc,
+                            LEAD(LastUpdateUtc) OVER (ORDER BY LastUpdateUtc DESC) AS ProximoLastUpdateUtc
+                        FROM raw.Ticket
+                        WHERE LastUpdateUtc IS NOT NULL
+                    ) AS Ordenado
+                    WHERE ProximoLastUpdateUtc IS NULL
+                       OR DATEDIFF(DAY, ProximoLastUpdateUtc, LastUpdateUtc) > 14
+                    ORDER BY LastUpdateUtc DESC
+                ) AS CursorRetomadaUtc
+            FROM raw.Ticket;";
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        if (await reader.ReadAsync(ct))
+        {
+            int totalRaw = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+            DateTime? maior = reader.IsDBNull(1) ? null : reader.GetDateTime(1);
+            DateTime? cursor = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
+            return (totalRaw, maior, cursor);
+        }
+
+        return (0, null, null);
     }
 
     private async Task<List<JsonElement>> BuscarTicketsAsync(
@@ -416,8 +647,18 @@ public sealed class MovideskIngestionService : IDisposable
         throw new HttpRequestException($"Não foi possível obter resposta de /{rota} após {maxTentativas} tentativas.");
     }
 
-    private async Task SalvarTicketsRawAsync(List<JsonElement> tickets, string fonte, CancellationToken ct)
+    /// <summary>
+    /// Faz MERGE na tabela raw.Ticket e retorna quantos registros foram realmente INSERIDOS (novos)
+    /// versus quantos foram ATUALIZADOS (já existiam no banco).
+    /// </summary>
+    private async Task<(int Inseridos, int Atualizados)> SalvarTicketsRawAsync(
+        List<JsonElement> tickets,
+        string fonte,
+        CancellationToken ct)
     {
+        int inseridos = 0;
+        int atualizados = 0;
+
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync(ct);
 
@@ -427,11 +668,12 @@ public sealed class MovideskIngestionService : IDisposable
                 SELECT @TicketId AS TicketId, @LastUpdateUtc AS LastUpdateUtc, @Payload AS Payload, @Fonte AS Fonte
             ) AS S
             ON T.TicketId = S.TicketId
-            WHEN MATCHED THEN
+            WHEN MATCHED AND (T.LastUpdateUtc IS NULL OR S.LastUpdateUtc IS NULL OR T.LastUpdateUtc <> S.LastUpdateUtc OR T.Processado = 0) THEN
                 UPDATE SET T.LastUpdateUtc = S.LastUpdateUtc, T.Payload = S.Payload, T.Fonte = S.Fonte, T.Processado = 0
             WHEN NOT MATCHED THEN
                 INSERT (TicketId, LastUpdateUtc, Payload, Fonte, Processado)
-                VALUES (S.TicketId, S.LastUpdateUtc, S.Payload, S.Fonte, 0);", conn);
+                VALUES (S.TicketId, S.LastUpdateUtc, S.Payload, S.Fonte, 0)
+            OUTPUT $action;", conn);
 
         cmd.Parameters.Add("@TicketId", SqlDbType.Int);
         cmd.Parameters.Add("@LastUpdateUtc", SqlDbType.DateTime2);
@@ -452,8 +694,18 @@ public sealed class MovideskIngestionService : IDisposable
             cmd.Parameters["@Payload"].Value = t.GetRawText();
             cmd.Parameters["@Fonte"].Value = fonte;
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            var acao = await cmd.ExecuteScalarAsync(ct) as string;
+            if (string.Equals(acao, "INSERT", StringComparison.OrdinalIgnoreCase))
+            {
+                inseridos++;
+            }
+            else if (string.Equals(acao, "UPDATE", StringComparison.OrdinalIgnoreCase))
+            {
+                atualizados++;
+            }
         }
+
+        return (inseridos, atualizados);
     }
 
     private async Task ExecutarProcessamentoCoreAsync(CancellationToken ct)
@@ -570,11 +822,22 @@ public sealed class MovideskIngestionService : IDisposable
         }
     }
 
-    private void AtualizarContagem(int total)
+    private void AtualizarCursorLabel(string cursorLabel)
     {
         lock (_stateLock)
         {
-            ProcessedInCurrentRun = total;
+            CurrentCursorLabel = cursorLabel;
+        }
+        NotifyStateChanged();
+    }
+
+    private void RegistrarEstatisticasLote(int lidos, int inseridos, int atualizados)
+    {
+        lock (_stateLock)
+        {
+            ProcessedInCurrentRun += lidos;
+            NewInsertedInCurrentRun += inseridos;
+            UpdatedInCurrentRun += atualizados;
         }
         NotifyStateChanged();
     }

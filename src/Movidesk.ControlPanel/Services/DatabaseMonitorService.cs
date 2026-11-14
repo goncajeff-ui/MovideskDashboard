@@ -9,7 +9,9 @@ public sealed record VolumetriaSnapshot(
     int TotalTicketsCore,
     int TotalTicketsRaw,
     int PendentesProcessamento,
+    int? MenorTicketId,
     int? UltimoTicketId,
+    DateTime? FronteiraHistoricaUtc,
     DateTime? UltimaMarcaDaguaUtc,
     DateTime ConsultadoEm,
     string? MensagemErro = null
@@ -43,7 +45,21 @@ public sealed class DatabaseMonitorService
                 (SELECT COUNT(*) FROM core.Fato_Ticket) AS TotalTicketsCore,
                 (SELECT COUNT(*) FROM raw.Ticket) AS TotalTicketsRaw,
                 (SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0) AS PendentesProcessamento,
+                (SELECT MIN(TicketId) FROM core.Fato_Ticket) AS MenorTicketId,
                 (SELECT MAX(TicketId) FROM core.Fato_Ticket) AS UltimoTicketId,
+                (
+                    SELECT TOP 1 LastUpdateUtc
+                    FROM (
+                        SELECT
+                            LastUpdateUtc,
+                            LEAD(LastUpdateUtc) OVER (ORDER BY LastUpdateUtc DESC) AS ProximoLastUpdateUtc
+                        FROM raw.Ticket
+                        WHERE LastUpdateUtc IS NOT NULL
+                    ) AS Ordenado
+                    WHERE ProximoLastUpdateUtc IS NULL
+                       OR DATEDIFF(DAY, ProximoLastUpdateUtc, LastUpdateUtc) > 14
+                    ORDER BY LastUpdateUtc DESC
+                ) AS FronteiraHistoricaUtc,
                 (SELECT TOP 1 UltimoValorUtc FROM ctl.MarcaDagua WHERE Entidade = 'TICKETS') AS UltimaMarcaDaguaUtc;";
 
         try
@@ -52,14 +68,16 @@ public sealed class DatabaseMonitorService
             await conn.OpenAsync(cancellationToken);
 
             var row = await conn.QueryFirstAsync<VolumetriaQueryRow>(
-                new CommandDefinition(sql, commandTimeout: 10, cancellationToken: cancellationToken));
+                new CommandDefinition(sql, commandTimeout: 15, cancellationToken: cancellationToken));
 
             return new VolumetriaSnapshot(
                 Conectado: true,
                 TotalTicketsCore: row.TotalTicketsCore,
                 TotalTicketsRaw: row.TotalTicketsRaw,
                 PendentesProcessamento: row.PendentesProcessamento,
+                MenorTicketId: row.MenorTicketId,
                 UltimoTicketId: row.UltimoTicketId,
+                FronteiraHistoricaUtc: row.FronteiraHistoricaUtc,
                 UltimaMarcaDaguaUtc: row.UltimaMarcaDaguaUtc,
                 ConsultadoEm: DateTime.Now
             );
@@ -71,7 +89,9 @@ public sealed class DatabaseMonitorService
                 TotalTicketsCore: 0,
                 TotalTicketsRaw: 0,
                 PendentesProcessamento: 0,
+                MenorTicketId: null,
                 UltimoTicketId: null,
+                FronteiraHistoricaUtc: null,
                 UltimaMarcaDaguaUtc: null,
                 ConsultadoEm: DateTime.Now,
                 MensagemErro: ex.Message
@@ -84,7 +104,9 @@ public sealed class DatabaseMonitorService
         public int TotalTicketsCore { get; set; }
         public int TotalTicketsRaw { get; set; }
         public int PendentesProcessamento { get; set; }
+        public int? MenorTicketId { get; set; }
         public int? UltimoTicketId { get; set; }
+        public DateTime? FronteiraHistoricaUtc { get; set; }
         public DateTime? UltimaMarcaDaguaUtc { get; set; }
     }
 }
