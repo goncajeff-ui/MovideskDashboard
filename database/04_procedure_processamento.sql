@@ -113,6 +113,132 @@ BEGIN
 END;
 GO
 
+CREATE OR ALTER PROCEDURE core.usp_ProcessarPessoas
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DROP TABLE IF EXISTS #PessoasPendentes;
+    SELECT TOP (5000) PessoaId, Payload
+    INTO #PessoasPendentes
+    FROM raw.Pessoa
+    WHERE Processado = 0;
+
+    IF NOT EXISTS (SELECT 1 FROM #PessoasPendentes)
+        RETURN;
+
+    /* --------------------------------------------------------------------
+       1. Garante na Dim_Cliente todas as Empresas referenciadas em $.relationships
+    -------------------------------------------------------------------- */
+    MERGE core.Dim_Cliente AS T
+    USING (
+        SELECT
+            CASE
+                WHEN CHARINDEX('/', r.orgId) > 0 THEN LEFT(r.orgId, CHARINDEX('/', r.orgId) - 1)
+                ELSE r.orgId
+            END AS ClienteId,
+            MAX(ISNULL(
+                CASE
+                    WHEN CHARINDEX('/', r.orgName) > 0 THEN LEFT(r.orgName, CHARINDEX('/', r.orgName) - 1)
+                    ELSE r.orgName
+                END,
+                N'Empresa Sem Nome'
+            )) AS Nome
+        FROM #PessoasPendentes p
+        CROSS APPLY OPENJSON(p.Payload, '$.relationships') WITH (
+            orgId   VARCHAR(64)   '$.id',
+            orgName NVARCHAR(256) '$.name'
+        ) r
+        WHERE r.orgId IS NOT NULL AND LEN(r.orgId) > 0
+        GROUP BY
+            CASE
+                WHEN CHARINDEX('/', r.orgId) > 0 THEN LEFT(r.orgId, CHARINDEX('/', r.orgId) - 1)
+                ELSE r.orgId
+            END
+    ) AS S
+    ON T.ClienteId = S.ClienteId
+    WHEN MATCHED THEN
+        UPDATE SET
+            T.Nome = ISNULL(T.Nome, S.Nome),
+            T.TipoPessoa = ISNULL(T.TipoPessoa, 2)
+    WHEN NOT MATCHED THEN
+        INSERT (ClienteId, Nome, TipoPessoa, Ativo)
+        VALUES (S.ClienteId, S.Nome, 2, 1);
+
+    /* --------------------------------------------------------------------
+       2. Atualiza Dim_Cliente com o cadastro completo de Empresas e Pessoas
+    -------------------------------------------------------------------- */
+    MERGE core.Dim_Cliente AS T
+    USING (
+        SELECT
+            p.PessoaId AS ClienteId,
+            MAX(ISNULL(j.businessName, ISNULL(j.corporateName, N'Sem Nome'))) AS Nome,
+            MAX(j.corporateName) AS RazaoSocial,
+            MAX(j.personType) AS TipoPessoa,
+            MAX(rel.EmpresaId) AS EmpresaId,
+            MAX(CAST(j.isActive AS INT)) AS Ativo,
+            MAX(CAST(TRY_CONVERT(DATETIME2(0), NULLIF(j.createdDate, '')) AT TIME ZONE 'UTC' AT TIME ZONE 'E. South America Standard Time' AS DATETIME2(0))) AS DataCadastro
+        FROM #PessoasPendentes p
+        CROSS APPLY OPENJSON(p.Payload) WITH (
+            businessName  NVARCHAR(256) '$.businessName',
+            corporateName NVARCHAR(256) '$.corporateName',
+            personType    TINYINT       '$.personType',
+            isActive      BIT           '$.isActive',
+            createdDate   NVARCHAR(40)  '$.createdDate'
+        ) j
+        OUTER APPLY (
+            SELECT TOP 1
+                CASE
+                    WHEN CHARINDEX('/', r.orgId) > 0 THEN LEFT(r.orgId, CHARINDEX('/', r.orgId) - 1)
+                    ELSE r.orgId
+                END AS EmpresaId
+            FROM OPENJSON(p.Payload, '$.relationships') WITH (
+                orgId VARCHAR(64) '$.id'
+            ) r
+            WHERE r.orgId IS NOT NULL AND LEN(r.orgId) > 0
+        ) rel
+        GROUP BY p.PessoaId
+    ) AS S
+    ON T.ClienteId = S.ClienteId
+    WHEN MATCHED THEN
+        UPDATE SET
+            T.Nome = S.Nome,
+            T.RazaoSocial = ISNULL(S.RazaoSocial, T.RazaoSocial),
+            T.TipoPessoa = ISNULL(S.TipoPessoa, T.TipoPessoa),
+            T.EmpresaId = ISNULL(S.EmpresaId, T.EmpresaId),
+            T.Ativo = ISNULL(S.Ativo, T.Ativo),
+            T.DataCadastro = ISNULL(S.DataCadastro, T.DataCadastro)
+    WHEN NOT MATCHED THEN
+        INSERT (ClienteId, Nome, RazaoSocial, TipoPessoa, EmpresaId, Ativo, DataCadastro)
+        VALUES (S.ClienteId, S.Nome, S.RazaoSocial, S.TipoPessoa, S.EmpresaId, ISNULL(S.Ativo, 1), S.DataCadastro);
+
+    /* --------------------------------------------------------------------
+       3. Retro-atualiza Fato_Ticket e Fato_TicketCliente onde EmpresaId
+          estava apontando para a Pessoa Física em vez da Organização!
+    -------------------------------------------------------------------- */
+    UPDATE t
+    SET t.EmpresaId = c.EmpresaId,
+        t.AtualizadoEm = SYSDATETIME()
+    FROM core.Fato_Ticket t
+    INNER JOIN core.Dim_Cliente c ON t.EmpresaId = c.ClienteId
+    WHERE c.EmpresaId IS NOT NULL
+      AND t.EmpresaId <> c.EmpresaId;
+
+    UPDATE tc
+    SET tc.EmpresaId = c.EmpresaId
+    FROM core.Fato_TicketCliente tc
+    INNER JOIN core.Dim_Cliente c ON tc.ClienteId = c.ClienteId
+    WHERE c.EmpresaId IS NOT NULL
+      AND (tc.EmpresaId IS NULL OR tc.EmpresaId <> c.EmpresaId);
+
+    UPDATE r
+    SET Processado = 1
+    FROM raw.Pessoa r
+    INNER JOIN #PessoasPendentes p ON r.PessoaId = p.PessoaId;
+END;
+GO
+
 CREATE OR ALTER PROCEDURE core.usp_ProcessarTickets
 AS
 BEGIN
@@ -200,10 +326,10 @@ BEGIN
         -------------------------------------------------------------------- */
         MERGE core.Dim_Agente AS T
         USING (
-            SELECT DISTINCT
+            SELECT
                 j.ownerId AS AgenteId,
-                ISNULL(j.ownerName, 'Não Atribuído') AS Nome,
-                j.ownerEmail AS Email
+                MAX(ISNULL(j.ownerName, N'Não Atribuído')) AS Nome,
+                MAX(j.ownerEmail) AS Email
             FROM #Pendentes p
             CROSS APPLY OPENJSON(p.Payload) WITH (
                 owner NVARCHAR(MAX) AS JSON
@@ -214,45 +340,106 @@ BEGIN
                 ownerEmail NVARCHAR(256) '$.email'
             ) j
             WHERE j.ownerId IS NOT NULL
+            GROUP BY j.ownerId
         ) AS S
         ON T.AgenteId = S.AgenteId
         WHEN MATCHED THEN
-            UPDATE SET T.Nome = S.Nome, T.Email = S.Email
+            UPDATE SET T.Nome = S.Nome, T.Email = ISNULL(S.Email, T.Email)
         WHEN NOT MATCHED THEN
             INSERT (AgenteId, Nome, Email, Ativo)
             VALUES (S.AgenteId, S.Nome, S.Email, 1);
 
         /* --------------------------------------------------------------------
-           3. Atualiza Dim_Cliente (extraído de clients)
+           3a. Atualiza Dim_Cliente com as Organizações ($.clients[].organization)
         -------------------------------------------------------------------- */
         MERGE core.Dim_Cliente AS T
         USING (
-            SELECT DISTINCT
-                c.id AS ClienteId,
-                ISNULL(c.businessName, 'Sem Nome') AS Nome,
-                c.corporateName AS RazaoSocial,
-                c.personType AS TipoPessoa,
+            SELECT
+                c.orgId AS ClienteId,
+                MAX(ISNULL(c.orgName, N'Empresa Sem Nome')) AS Nome,
+                MAX(c.orgCorporateName) AS RazaoSocial,
+                2 AS TipoPessoa,
                 1 AS Ativo
             FROM #Pendentes p
             CROSS APPLY OPENJSON(p.Payload, '$.clients') WITH (
-                id            VARCHAR(64),
-                businessName  NVARCHAR(256),
-                corporateName NVARCHAR(256),
-                personType    TINYINT
+                orgId            VARCHAR(64)   '$.organization.id',
+                orgName          NVARCHAR(256) '$.organization.businessName',
+                orgCorporateName NVARCHAR(256) '$.organization.corporateName'
             ) c
-            WHERE c.id IS NOT NULL
+            WHERE c.orgId IS NOT NULL
+            GROUP BY c.orgId
         ) AS S
         ON T.ClienteId = S.ClienteId
         WHEN MATCHED THEN
-            UPDATE SET T.Nome = S.Nome, T.RazaoSocial = ISNULL(S.RazaoSocial, T.RazaoSocial)
+            UPDATE SET
+                T.Nome = S.Nome,
+                T.RazaoSocial = ISNULL(S.RazaoSocial, T.RazaoSocial),
+                T.TipoPessoa = 2
         WHEN NOT MATCHED THEN
             INSERT (ClienteId, Nome, RazaoSocial, TipoPessoa, Ativo)
             VALUES (S.ClienteId, S.Nome, S.RazaoSocial, S.TipoPessoa, S.Ativo);
 
         /* --------------------------------------------------------------------
+           3b. Atualiza Dim_Cliente (extraído de $.clients, vinculando EmpresaId)
+        -------------------------------------------------------------------- */
+        MERGE core.Dim_Cliente AS T
+        USING (
+            SELECT
+                c.id AS ClienteId,
+                MAX(ISNULL(c.businessName, N'Sem Nome')) AS Nome,
+                MAX(c.corporateName) AS RazaoSocial,
+                MAX(c.personType) AS TipoPessoa,
+                MAX(c.orgId) AS EmpresaId,
+                1 AS Ativo
+            FROM #Pendentes p
+            CROSS APPLY OPENJSON(p.Payload, '$.clients') WITH (
+                id            VARCHAR(64)   '$.id',
+                businessName  NVARCHAR(256) '$.businessName',
+                corporateName NVARCHAR(256) '$.corporateName',
+                personType    TINYINT       '$.personType',
+                orgId         VARCHAR(64)   '$.organization.id'
+            ) c
+            WHERE c.id IS NOT NULL
+            GROUP BY c.id
+        ) AS S
+        ON T.ClienteId = S.ClienteId
+        WHEN MATCHED THEN
+            UPDATE SET
+                T.Nome = S.Nome,
+                T.RazaoSocial = ISNULL(S.RazaoSocial, T.RazaoSocial),
+                T.TipoPessoa = ISNULL(S.TipoPessoa, T.TipoPessoa),
+                T.EmpresaId = ISNULL(S.EmpresaId, T.EmpresaId)
+        WHEN NOT MATCHED THEN
+            INSERT (ClienteId, Nome, RazaoSocial, TipoPessoa, EmpresaId, Ativo)
+            VALUES (S.ClienteId, S.Nome, S.RazaoSocial, S.TipoPessoa, S.EmpresaId, S.Ativo);
+
+        /* --------------------------------------------------------------------
+           3c. Atualiza core.Fato_TicketCliente (Ponte N:N Ticket <-> Cliente/Empresa)
+        -------------------------------------------------------------------- */
+        DELETE tc
+        FROM core.Fato_TicketCliente tc
+        INNER JOIN #Pendentes p ON tc.TicketId = p.TicketId;
+
+        INSERT INTO core.Fato_TicketCliente (TicketId, ClienteId, EmpresaId)
+        SELECT
+            p.TicketId,
+            c.id AS ClienteId,
+            MAX(ISNULL(c.orgId, CASE WHEN c.personType IN (2, 4) THEN c.id ELSE dc.EmpresaId END)) AS EmpresaId
+        FROM #Pendentes p
+        CROSS APPLY OPENJSON(p.Payload, '$.clients') WITH (
+            id         VARCHAR(64) '$.id',
+            personType TINYINT     '$.personType',
+            orgId      VARCHAR(64) '$.organization.id'
+        ) c
+        LEFT JOIN core.Dim_Cliente dc ON c.id = dc.ClienteId
+        WHERE c.id IS NOT NULL
+        GROUP BY p.TicketId, c.id;
+
+        /* --------------------------------------------------------------------
            4. Atualiza core.Fato_Ticket
-              Converte todas as datas UTC da API para Horário de Brasília
-              e persiste também CriadoPorId e Tags
+              - Datas convertidas de UTC -> Horário de Brasília
+              - EmpresaId prioriza a Organização (Empresa) em vez da Pessoa Física
+              - Persiste CriadoPorId e Tags
         -------------------------------------------------------------------- */
         MERGE core.Fato_Ticket AS T
         USING (
@@ -270,7 +457,7 @@ BEGIN
                 j.ownerTeam,
                 o.ownerId,
                 j.createdById,
-                cli.primeiroClienteId AS EmpresaId,
+                cli.EmpresaPrincipalId AS EmpresaId,
                 j.serviceFirstLevel,
                 j.serviceSecondLevel,
                 j.serviceThirdLevel,
@@ -329,8 +516,21 @@ BEGIN
                 SELECT JSON_VALUE(p.Payload, '$.owner.id') AS ownerId
             ) o
             OUTER APPLY (
-                SELECT TOP 1 id AS primeiroClienteId
-                FROM OPENJSON(p.Payload, '$.clients') WITH (id VARCHAR(64))
+                SELECT TOP 1
+                    ISNULL(
+                        c.orgId,
+                        CASE
+                            WHEN c.personType IN (2, 4) THEN c.id
+                            ELSE ISNULL(dc.EmpresaId, c.id)
+                        END
+                    ) AS EmpresaPrincipalId
+                FROM OPENJSON(p.Payload, '$.clients') WITH (
+                    id         VARCHAR(64) '$.id',
+                    personType TINYINT     '$.personType',
+                    orgId      VARCHAR(64) '$.organization.id'
+                ) c
+                LEFT JOIN core.Dim_Cliente dc ON c.id = dc.ClienteId
+                WHERE c.id IS NOT NULL
             ) cli
         ) AS S
         ON T.TicketId = S.TicketId

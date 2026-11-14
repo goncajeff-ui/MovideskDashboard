@@ -188,10 +188,17 @@
                         </strong>
                     </div>
 
-                    <div class="mini-metric @(_volumetria?.Conectado == true && _volumetria.PendentesProcessamento > 0 ? "mini-metric-warn" : "")">
-                        <span class="mini-label">Pendentes RAW → Core</span>
-                        <strong class="mini-value">
-                            @(_volumetria?.Conectado == true ? _volumetria.PendentesProcessamento.ToString("N0") : "--")
+                    <div class="mini-metric">
+                        <span class="mini-label">Empresas / Contatos Vinculados</span>
+                        <strong class="mini-value mini-value-sm">
+                            @if (_volumetria?.Conectado == true)
+                            {
+                                @($"{_volumetria.TotalEmpresasClientes:N0} emp. / {_volumetria.TotalContatosVinculados:N0} vínc.")
+                            }
+                            else
+                            {
+                                @("--")
+                            }
                         </strong>
                     </div>
 
@@ -210,9 +217,16 @@
                     </div>
 
                     <div class="mini-metric">
-                        <span class="mini-label">Fronteira Histórica (UTC)</span>
+                        <span class="mini-label">Fronteira Histórica / Snapshot</span>
                         <strong class="mini-value mini-value-sm">
-                            @(_volumetria?.FronteiraHistoricaUtc?.ToString("dd/MM/yyyy HH:mm") ?? "--")
+                            @if (_volumetria?.Conectado == true)
+                            {
+                                @($"{_volumetria.FronteiraHistoricaUtc?.ToString("dd/MM/yyyy HH:mm") ?? "--"} ({_volumetria.TotalDiasSnapshot}d)")
+                            }
+                            else
+                            {
+                                @("--")
+                            }
                         </strong>
                     </div>
                 </div>
@@ -248,7 +262,7 @@
             <div class="card-header">
                 <div class="card-title-group">
                     <h2>3. Orquestrador de Carga de Dados (Retomada Inteligente Anti-Travamento)</h2>
-                    <span class="card-subtitle">Detecta automaticamente os chamados já salvos no banco e continua de onde parou sem repetir lotes</span>
+                    <span class="card-subtitle">Detecta automaticamente os chamados já salvos no banco, sincroniza Empresas (/persons) e continua de onde parou</span>
                 </div>
                 <span class="badge @GetIngestionBadgeClass()">
                     @if (IngestionService.IsRunning)
@@ -317,7 +331,7 @@
                             @if (IngestionService.IsRunning && IngestionService.CurrentJobType.StartsWith("Carga Histórica", StringComparison.Ordinal))
                             {
                                 <span class="spinner spinner-sm" aria-hidden="true"></span>
-                                <span>@IngestionService.CurrentStageLabel</span>
+                                @IngestionService.CurrentStageLabel
                             }
                             else if (_volumetria?.TotalTicketsRaw > 0)
                             {
@@ -336,11 +350,26 @@
                             @if (IngestionService.IsRunning && IngestionService.CurrentJobType == "Carga Incremental")
                             {
                                 <span class="spinner spinner-sm" aria-hidden="true"></span>
-                                <span>@IngestionService.CurrentStageLabel</span>
+                                @IngestionService.CurrentStageLabel
                             }
                             else
                             {
                                 <span>Disparar Carga Incremental</span>
+                            }
+                        </button>
+
+                        <button type="button"
+                                class="btn btn-secondary"
+                                @onclick="DispararSincronizacaoEmpresasAsync"
+                                disabled="@IngestionService.IsRunning">
+                            @if (IngestionService.IsRunning && IngestionService.CurrentJobType.StartsWith("Sincronização de Empresas", StringComparison.Ordinal))
+                            {
+                                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                                @IngestionService.CurrentStageLabel
+                            }
+                            else
+                            {
+                                <span>Sincronizar Empresas (/persons)</span>
                             }
                         </button>
 
@@ -372,7 +401,7 @@
                         @if (ingestionLogs.Count == 0)
                         {
                             <div class="log-empty">
-                                Clique em "Retomar Carga Histórica (Automático)" para continuar importando o histórico a partir de onde o banco parou, sem precisar informar skip manual.
+                                Use "Sincronizar Empresas (/persons)" para vincular os chamados já importados às suas Empresas reais, ou "Retomar Carga Histórica (Automático)" para continuar importando o histórico.
                             </div>
                         }
                         else
@@ -410,6 +439,13 @@
         if (!firstRender) return;
 
         await SupersetService.CheckHealthAsync();
+
+        // Garante que as novas Procedures (Fuso BRT, Snapshot 90d, Pessoas) e as 8 Views mart.* estejam atualizadas no SQL Server
+        _ = Task.Run(async () =>
+        {
+            await IngestionService.GarantirObjetosBancoAtualizadosAsync();
+            await AtualizarVolumetriaAsync();
+        });
 
         _timerCts = new CancellationTokenSource();
         _ = RunAutoRefreshLoopAsync(_timerCts.Token);
@@ -488,6 +524,14 @@
         if (IngestionService.IsRunning) return;
 
         await IngestionService.ExecutarCargaIncrementalAsync();
+        await AtualizarVolumetriaAsync();
+    }
+
+    private async Task DispararSincronizacaoEmpresasAsync()
+    {
+        if (IngestionService.IsRunning) return;
+
+        await IngestionService.ExecutarSincronizacaoEmpresasAsync();
         await AtualizarVolumetriaAsync();
     }
 

@@ -9,6 +9,9 @@ public sealed record VolumetriaSnapshot(
     int TotalTicketsCore,
     int TotalTicketsRaw,
     int PendentesProcessamento,
+    int TotalEmpresasClientes,
+    int TotalContatosVinculados,
+    int TotalDiasSnapshot,
     int? MenorTicketId,
     int? UltimoTicketId,
     DateTime? FronteiraHistoricaUtc,
@@ -45,6 +48,9 @@ public sealed class DatabaseMonitorService
                 (SELECT COUNT(*) FROM core.Fato_Ticket) AS TotalTicketsCore,
                 (SELECT COUNT(*) FROM raw.Ticket) AS TotalTicketsRaw,
                 (SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0) AS PendentesProcessamento,
+                (SELECT COUNT(*) FROM core.Dim_Cliente WHERE ISNULL(TipoPessoa, 2) IN (2, 4)) AS TotalEmpresasClientes,
+                (SELECT COUNT(*) FROM core.Dim_Cliente WHERE TipoPessoa = 1 AND EmpresaId IS NOT NULL) AS TotalContatosVinculados,
+                (SELECT COUNT(DISTINCT DataSnapshot) FROM core.Fato_SnapshotBacklog) AS TotalDiasSnapshot,
                 (SELECT MIN(TicketId) FROM core.Fato_Ticket) AS MenorTicketId,
                 (SELECT MAX(TicketId) FROM core.Fato_Ticket) AS UltimoTicketId,
                 (
@@ -75,6 +81,9 @@ public sealed class DatabaseMonitorService
                 TotalTicketsCore: row.TotalTicketsCore,
                 TotalTicketsRaw: row.TotalTicketsRaw,
                 PendentesProcessamento: row.PendentesProcessamento,
+                TotalEmpresasClientes: row.TotalEmpresasClientes,
+                TotalContatosVinculados: row.TotalContatosVinculados,
+                TotalDiasSnapshot: row.TotalDiasSnapshot,
                 MenorTicketId: row.MenorTicketId,
                 UltimoTicketId: row.UltimoTicketId,
                 FronteiraHistoricaUtc: row.FronteiraHistoricaUtc,
@@ -89,6 +98,9 @@ public sealed class DatabaseMonitorService
                 TotalTicketsCore: 0,
                 TotalTicketsRaw: 0,
                 PendentesProcessamento: 0,
+                TotalEmpresasClientes: 0,
+                TotalContatosVinculados: 0,
+                TotalDiasSnapshot: 0,
                 MenorTicketId: null,
                 UltimoTicketId: null,
                 FronteiraHistoricaUtc: null,
@@ -104,6 +116,9 @@ public sealed class DatabaseMonitorService
         public int TotalTicketsCore { get; set; }
         public int TotalTicketsRaw { get; set; }
         public int PendentesProcessamento { get; set; }
+        public int TotalEmpresasClientes { get; set; }
+        public int TotalContatosVinculados { get; set; }
+        public int TotalDiasSnapshot { get; set; }
         public int? MenorTicketId { get; set; }
         public int? UltimoTicketId { get; set; }
         public DateTime? FronteiraHistoricaUtc { get; set; }

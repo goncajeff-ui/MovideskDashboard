@@ -33,6 +33,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </None>
+    <EmbeddedResource Include="..\..\database\03_views_kpis.sql" LogicalName="Movidesk.ControlPanel.Sql.03_views_kpis.sql" />
+    <EmbeddedResource Include="..\..\database\04_procedure_processamento.sql" LogicalName="Movidesk.ControlPanel.Sql.04_procedure_processamento.sql" />
   </ItemGroup>
 
 </Project>

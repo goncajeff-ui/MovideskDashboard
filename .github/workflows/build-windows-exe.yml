@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'src/Movidesk.ControlPanel/**'
+      - 'database/**'
       - '.github/workflows/build-windows-exe.yml'
   workflow_dispatch:
 

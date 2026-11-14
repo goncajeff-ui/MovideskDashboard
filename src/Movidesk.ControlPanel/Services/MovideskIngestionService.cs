@@ -1,6 +1,9 @@
 using System.Data;
 using System.Globalization;
+using System.Reflection;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 
@@ -21,7 +24,8 @@ public enum IngestionStage
 /// <summary>
 /// Orquestrador assíncrono de ingestão da API Movidesk -> SQL Server (MovideskDM).
 /// Executa cargas pesadas estritamente em Task.Run no background para nunca travar a UI Blazor.
-/// Possui Retomada Inteligente por Cursor de Data (LastUpdateUtc) para nunca rebaixar chamados já salvos.
+/// Possui Retomada Inteligente por Cursor de Data (LastUpdateUtc), sincronização de Empresas (/persons)
+/// e atualização automática das Procedures e Views analíticas no SQL Server.
 /// </summary>
 public sealed class MovideskIngestionService : IDisposable
 {
@@ -40,6 +44,7 @@ public sealed class MovideskIngestionService : IDisposable
     private readonly object _stateLock = new();
     private readonly List<string> _logs = new();
     private CancellationTokenSource? _cts;
+    private bool _objetosBancoVerificados;
 
     public bool IsRunning { get; private set; }
     public IngestionStage CurrentStage { get; private set; } = IngestionStage.Idle;
@@ -97,6 +102,278 @@ public sealed class MovideskIngestionService : IDisposable
     }
 
     /// <summary>
+    /// Aplica automaticamente no banco MovideskDM as Procedures (usp_AtualizarSnapshotBacklog,
+    /// usp_ProcessarPessoas, usp_ProcessarTickets), o dicionário Dim_CampoCustomizado e as 8 Views mart.*,
+    /// além de reprocessar os chamados existentes em raw.Ticket caso Fato_SnapshotBacklog esteja vazio.
+    /// </summary>
+    public async Task GarantirObjetosBancoAtualizadosAsync(CancellationToken ct = default)
+    {
+        if (_objetosBancoVerificados) return;
+
+        try
+        {
+            await using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync(ct);
+
+            // 1. Garante dicionário de Campos Customizados
+            const string sqlCampos = @"
+                MERGE core.Dim_CampoCustomizado AS T
+                USING (VALUES
+                    (133948, N'Versão do Produto / Release', N'Versão do sistema informada no chamado (ex.: KN1, e-Guardian, Aquilla)'),
+                    (133947, N'Campo Customizado #133947',   N'Campo adicional de formulário de atendimento (regra 67477)'),
+                    (129731, N'Campo Customizado #129731',   N'Campo adicional de formulário de atendimento (regra 64915)'),
+                    (142628, N'Campo Customizado #142628',   N'Campo adicional de formulário de atendimento (regra 72075)'),
+                    (184522, N'Campo Customizado #184522',   N'Campo adicional de formulário de atendimento (regra 94167)')
+                ) AS S (CampoId, Nome, Descricao)
+                ON T.CampoId = S.CampoId
+                WHEN MATCHED THEN UPDATE SET T.Nome = S.Nome, T.Descricao = S.Descricao
+                WHEN NOT MATCHED THEN INSERT (CampoId, Nome, Descricao) VALUES (S.CampoId, S.Nome, S.Descricao);";
+
+            await using (var cmdCampos = new SqlCommand(sqlCampos, conn) { CommandTimeout = 30 })
+            {
+                await cmdCampos.ExecuteNonQueryAsync(ct);
+            }
+
+            // 2. Aplica 04_procedure_processamento.sql e 03_views_kpis.sql embutidos no executável
+            await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.04_procedure_processamento.sql", ct);
+            await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.03_views_kpis.sql", ct);
+
+            // 3. Verifica se os chamados já existentes precisam ser reprocessados para Fuso BRT + Snapshot 90d
+            const string sqlCheckSnapshot = @"
+                SELECT
+                    (SELECT COUNT(*) FROM raw.Ticket) AS TotalRaw,
+                    (SELECT COUNT(DISTINCT DataSnapshot) FROM core.Fato_SnapshotBacklog) AS DiasSnapshot;";
+
+            int totalRaw = 0;
+            int diasSnapshot = 0;
+            await using (var cmdCheck = new SqlCommand(sqlCheckSnapshot, conn) { CommandTimeout = 30 })
+            await using (var reader = await cmdCheck.ExecuteReaderAsync(ct))
+            {
+                if (await reader.ReadAsync(ct))
+                {
+                    totalRaw = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                    diasSnapshot = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                }
+            }
+
+            if (totalRaw > 0 && diasSnapshot < 2)
+            {
+                AppendLog($"[INF] Atualizando {totalRaw:N0} chamados existentes para Horário de Brasília (BRT), DataFim e Snapshot de 90 dias...");
+
+                await using (var cmdReset = new SqlCommand("UPDATE raw.Ticket SET Processado = 0 WHERE Processado = 1;", conn) { CommandTimeout = 120 })
+                {
+                    await cmdReset.ExecuteNonQueryAsync(ct);
+                }
+
+                while (!ct.IsCancellationRequested)
+                {
+                    int pendentes;
+                    await using (var cmdPend = new SqlCommand("SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0;", conn) { CommandTimeout = 30 })
+                    {
+                        pendentes = Convert.ToInt32(await cmdPend.ExecuteScalarAsync(ct));
+                    }
+
+                    if (pendentes <= 0) break;
+
+                    await using var cmdProc = new SqlCommand("core.usp_ProcessarTickets", conn)
+                    {
+                        CommandType = CommandType.StoredProcedure,
+                        CommandTimeout = 300
+                    };
+                    await cmdProc.ExecuteNonQueryAsync(ct);
+                }
+
+                await using (var cmdSnap = new SqlCommand("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;", conn) { CommandTimeout = 300 })
+                {
+                    await cmdSnap.ExecuteNonQueryAsync(ct);
+                }
+
+                AppendLog("[OK] Procedures, 8 Views (incluindo mart.vw_BacklogEvolucao), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
+            }
+            else
+            {
+                AppendLog("[OK] Procedures (usp_ProcessarTickets, usp_ProcessarPessoas, usp_AtualizarSnapshotBacklog) e 8 Views sincronizadas no MovideskDM.");
+            }
+
+            _objetosBancoVerificados = true;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[WRN] Aviso ao verificar atualização automática de procedures/views: {ex.Message}");
+        }
+    }
+
+    private static async Task ExecutarScriptSqlEmbutidoAsync(SqlConnection conn, string resourceName, CancellationToken ct)
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        await using var stream = asm.GetManifestResourceStream(resourceName);
+        if (stream is null) return;
+
+        using var sr = new StreamReader(stream, Encoding.UTF8);
+        var script = await sr.ReadToEndAsync(ct);
+
+        var batches = Regex.Split(script, @"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        foreach (var rawBatch in batches)
+        {
+            var batch = rawBatch.Trim();
+            if (string.IsNullOrWhiteSpace(batch)) continue;
+            if (batch.StartsWith("USE ", StringComparison.OrdinalIgnoreCase)) continue;
+
+            await using var cmd = new SqlCommand(batch, conn) { CommandTimeout = 180 };
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Sincroniza a API /persons (Empresas + vínculo Pessoa Física -> Empresa dos chamados existentes)
+    /// em Task.Run para corrigir retroativamente core.Dim_Cliente e core.Fato_Ticket.EmpresaId sem rebaixar tickets.
+    /// </summary>
+    public async Task<bool> ExecutarSincronizacaoEmpresasAsync()
+    {
+        CancellationToken token;
+        lock (_stateLock)
+        {
+            if (IsRunning) return false;
+
+            IsRunning = true;
+            CurrentJobType = "Sincronização de Empresas (/persons)";
+            ProcessedInCurrentRun = 0;
+            NewInsertedInCurrentRun = 0;
+            UpdatedInCurrentRun = 0;
+            CurrentCursorLabel = "API /persons (Empresas + Vínculos)";
+            StartedAt = DateTime.Now;
+            _logs.Clear();
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+            token = _cts.Token;
+        }
+
+        SetStage(IngestionStage.Extracting, "Extraindo...", "Iniciando Sincronização de Empresas e Vínculos de Clientes (/persons)...");
+
+        await Task.Run(async () =>
+        {
+            int? execucaoId = await RegistrarInicioExecucaoAsync("PESSOAS_PAINEL");
+            string statusFinal = "CONCLUIDO";
+            string? msgFinal = null;
+
+            try
+            {
+                await GarantirObjetosBancoAtualizadosAsync(token);
+                await SincronizarEmpresasInternoAsync(token);
+
+                token.ThrowIfCancellationRequested();
+                AtualizarCursorLabel("Empresas e Contatos Sincronizados");
+                SetStage(
+                    IngestionStage.Completed,
+                    "Concluído",
+                    $"Sincronização de Empresas concluída! +{NewInsertedInCurrentRun:N0} novos cadastros, {UpdatedInCurrentRun:N0} atualizados em core.Dim_Cliente.");
+            }
+            catch (OperationCanceledException)
+            {
+                statusFinal = "CANCELADO";
+                msgFinal = "Interrompida pelo usuário.";
+                SetStage(IngestionStage.Cancelled, "Cancelado", "Sincronização de Empresas pausada pelo operador.");
+            }
+            catch (Exception ex)
+            {
+                statusFinal = "ERRO";
+                msgFinal = ex.Message;
+                SetStage(IngestionStage.Error, "Erro na Carga", $"[ERR] Falha na Sincronização de Empresas: {ex.Message}");
+            }
+            finally
+            {
+                await RegistrarFimExecucaoAsync(execucaoId, statusFinal, ProcessedInCurrentRun, msgFinal);
+                FinalizarEstadoExecucao();
+            }
+        });
+
+        return true;
+    }
+
+    private async Task SincronizarEmpresasInternoAsync(CancellationToken token)
+    {
+        // ---------------------------------------------------------------------
+        // Etapa 1: Baixar todas as Empresas cadastradas no Movidesk (personType eq 2)
+        // ---------------------------------------------------------------------
+        AppendLog("[INF] --- Etapa 1/2: Importando cadastro de Empresas (/persons com personType eq 2) ---");
+        int skipEmpresas = 0;
+        const int topPessoas = 100;
+
+        while (!token.IsCancellationRequested)
+        {
+            await RespeitarRateLimitAsync(token);
+
+            AtualizarCursorLabel($"Empresas (/persons skip={skipEmpresas})");
+            SetStage(IngestionStage.Extracting, "Extraindo...", $"Buscando Empresas em /persons (personType eq 2, skip={skipEmpresas})...");
+
+            var empresas = await BuscarPessoasAsync(topPessoas, skipEmpresas, "id asc", "personType eq 2", token);
+            if (empresas.Count == 0) break;
+
+            SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {empresas.Count} empresas em raw.Pessoa...");
+            var (ins, upd) = await SalvarPessoasRawAsync(empresas, "API_EMPRESA", token);
+
+            SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarPessoas...");
+            await ExecutarProcessamentoPessoasCoreAsync(token);
+
+            RegistrarEstatisticasLote(empresas.Count, ins, upd);
+            AppendLog($"[OK] Empresas (/persons): +{ins} novas, {upd} atualizadas (skip={skipEmpresas}).");
+
+            if (empresas.Count < topPessoas) break;
+            skipEmpresas += topPessoas;
+        }
+
+        // ---------------------------------------------------------------------
+        // Etapa 2: Resolver o vínculo Pessoa Física -> Empresa para os Contatos
+        // já presentes nos chamados importados (Dim_Cliente sem EmpresaId)
+        // ---------------------------------------------------------------------
+        var contatosSemEmpresa = await ObterContatosPendentesVinculoAsync(token);
+        if (contatosSemEmpresa.Count > 0)
+        {
+            AppendLog($"[INF] --- Etapa 2/2: Resolvendo vínculo de Empresa para {contatosSemEmpresa.Count:N0} contatos de chamados já importados ---");
+
+            const int tamanhoLoteIds = 15;
+            int totalLotes = (int)Math.Ceiling(contatosSemEmpresa.Count / (double)tamanhoLoteIds);
+
+            for (int indiceLote = 0; indiceLote < totalLotes; indiceLote++)
+            {
+                token.ThrowIfCancellationRequested();
+                await RespeitarRateLimitAsync(token);
+
+                var loteIds = contatosSemEmpresa
+                    .Skip(indiceLote * tamanhoLoteIds)
+                    .Take(tamanhoLoteIds)
+                    .ToList();
+
+                var clausulasOr = loteIds.Select(id => $"id eq '{id.Replace("'", "''", StringComparison.Ordinal)}'");
+                string filtroContatos = string.Join(" or ", clausulasOr);
+
+                AtualizarCursorLabel($"Vínculo Contatos ({indiceLote + 1}/{totalLotes})");
+                SetStage(
+                    IngestionStage.Extracting,
+                    "Extraindo...",
+                    $"Consultando organização de contatos em /persons (lote {indiceLote + 1}/{totalLotes})...");
+
+                var pessoas = await BuscarPessoasAsync(topPessoas, 0, "id asc", filtroContatos, token);
+                if (pessoas.Count > 0)
+                {
+                    SetStage(IngestionStage.SavingToDatabase, "Salvando no Banco...", $"Salvando {pessoas.Count} contatos em raw.Pessoa...");
+                    var (ins, upd) = await SalvarPessoasRawAsync(pessoas, "API_CONTATO", token);
+
+                    SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Vinculando chamados às Empresas (core.usp_ProcessarPessoas)...");
+                    await ExecutarProcessamentoPessoasCoreAsync(token);
+
+                    RegistrarEstatisticasLote(pessoas.Count, ins, upd);
+                    AppendLog($"[OK] Lote {indiceLote + 1}/{totalLotes}: {pessoas.Count} contatos processados e vinculados às respectivas Empresas.");
+                }
+            }
+        }
+        else
+        {
+            AppendLog("[INF] Todos os contatos dos chamados atuais já estão sincronizados em raw.Pessoa.");
+        }
+    }
+
+    /// <summary>
     /// Dispara ou retoma a Carga Histórica Completa em background (Task.Run).
     /// Detecta automaticamente os chamados já salvos em raw.Ticket e continua exatamente
     /// da fronteira histórica (LastUpdateUtc) sem repetir chamados já importados.
@@ -132,6 +409,8 @@ public sealed class MovideskIngestionService : IDisposable
 
             try
             {
+                await GarantirObjetosBancoAtualizadosAsync(token);
+
                 var estadoBanco = await ObterEstadoRetomadaAsync(token);
 
                 if (estadoBanco.TotalRaw > 0 && estadoBanco.CursorRetomadaUtc.HasValue)
@@ -421,6 +700,8 @@ public sealed class MovideskIngestionService : IDisposable
 
             try
             {
+                await GarantirObjetosBancoAtualizadosAsync(token);
+
                 var ultimaData = await ObterUltimaMarcaDaguaAsync("TICKETS", token);
                 if (!ultimaData.HasValue)
                 {
@@ -565,6 +846,37 @@ public sealed class MovideskIngestionService : IDisposable
         return (0, null, null);
     }
 
+    private async Task<List<string>> ObterContatosPendentesVinculoAsync(CancellationToken ct)
+    {
+        const string sql = @"
+            SELECT c.ClienteId
+            FROM core.Dim_Cliente c
+            WHERE ISNULL(c.TipoPessoa, 1) = 1
+              AND c.EmpresaId IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM raw.Pessoa rp WHERE rp.PessoaId = c.ClienteId
+              )
+            ORDER BY c.ClienteId;";
+
+        var lista = new List<string>();
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        while (await reader.ReadAsync(ct))
+        {
+            if (!reader.IsDBNull(0))
+            {
+                var id = reader.GetString(0);
+                if (!string.IsNullOrWhiteSpace(id))
+                    lista.Add(id);
+            }
+        }
+
+        return lista;
+    }
+
     private async Task<List<JsonElement>> BuscarTicketsAsync(
         string rota,
         int top,
@@ -579,7 +891,8 @@ public sealed class MovideskIngestionService : IDisposable
                         "slaAgreement,slaAgreementRule,slaSolutionTime,slaResponseTime,slaSolutionDate," +
                         "slaSolutionDateIsPaused,slaResponseDate,slaRealResponseDate,resolvedInFirstCall";
 
-        string expand = "owner,clients,statusHistories,customFieldValues";
+        // Inclui createdBy e clients($expand=organization) para vincular sempre a Empresa (Organização) real
+        string expand = "owner,createdBy,clients($expand=organization),statusHistories,customFieldValues";
 
         var query = $"$select={select}&$expand={expand}&$top={top}&$skip={skip}&$orderby={Uri.EscapeDataString(orderby)}";
         if (!string.IsNullOrEmpty(filter))
@@ -588,7 +901,34 @@ public sealed class MovideskIngestionService : IDisposable
         }
 
         string url = $"{_baseUrl}/{rota}?token={Uri.EscapeDataString(_apiToken)}&{query}";
+        return await ExecutarGetJsonArrayComRetryAsync(url, rota, ct);
+    }
 
+    private async Task<List<JsonElement>> BuscarPessoasAsync(
+        int top,
+        int skip,
+        string orderby,
+        string filter,
+        CancellationToken ct)
+    {
+        string select = "id,businessName,corporateName,cpfCnpj,personType,profileType,isActive,createdDate";
+        string expand = "relationships";
+
+        var query = $"$select={select}&$expand={expand}&$top={top}&$skip={skip}&$orderby={Uri.EscapeDataString(orderby)}";
+        if (!string.IsNullOrEmpty(filter))
+        {
+            query += $"&$filter={Uri.EscapeDataString(filter)}";
+        }
+
+        string url = $"{_baseUrl}/persons?token={Uri.EscapeDataString(_apiToken)}&{query}";
+        return await ExecutarGetJsonArrayComRetryAsync(url, "persons", ct);
+    }
+
+    private async Task<List<JsonElement>> ExecutarGetJsonArrayComRetryAsync(
+        string url,
+        string nomeRota,
+        CancellationToken ct)
+    {
         const int maxTentativas = 5;
         for (int tentativa = 1; tentativa <= maxTentativas; tentativa++)
         {
@@ -625,12 +965,12 @@ public sealed class MovideskIngestionService : IDisposable
                         delaySegundos = (int)delta.TotalSeconds + 2;
                     }
 
-                    AppendLog($"[WRN] API Movidesk retornou HTTP {statusCode} (tentativa {tentativa}/{maxTentativas}). Aguardando {delaySegundos}s...");
+                    AppendLog($"[WRN] API Movidesk /{nomeRota} retornou HTTP {statusCode} (tentativa {tentativa}/{maxTentativas}). Aguardando {delaySegundos}s...");
                     await Task.Delay(TimeSpan.FromSeconds(delaySegundos), ct);
                     continue;
                 }
 
-                throw new HttpRequestException($"Erro ao consultar /{rota} ({resp.StatusCode}): {erro}");
+                throw new HttpRequestException($"Erro ao consultar /{nomeRota} ({resp.StatusCode}): {erro}");
             }
             catch (OperationCanceledException)
             {
@@ -639,12 +979,12 @@ public sealed class MovideskIngestionService : IDisposable
             catch (Exception ex) when (ex is not HttpRequestException || ex.Message.Contains("503"))
             {
                 if (tentativa == maxTentativas) throw;
-                AppendLog($"[WRN] Instabilidade de rede ({tentativa}/{maxTentativas}): {ex.Message}. Tentando novamente em 15s...");
+                AppendLog($"[WRN] Instabilidade de rede em /{nomeRota} ({tentativa}/{maxTentativas}): {ex.Message}. Tentando novamente em 15s...");
                 await Task.Delay(TimeSpan.FromSeconds(15), ct);
             }
         }
 
-        throw new HttpRequestException($"Não foi possível obter resposta de /{rota} após {maxTentativas} tentativas.");
+        throw new HttpRequestException($"Não foi possível obter resposta de /{nomeRota} após {maxTentativas} tentativas.");
     }
 
     /// <summary>
@@ -708,11 +1048,80 @@ public sealed class MovideskIngestionService : IDisposable
         return (inseridos, atualizados);
     }
 
+    private async Task<(int Inseridos, int Atualizados)> SalvarPessoasRawAsync(
+        List<JsonElement> pessoas,
+        string fonte,
+        CancellationToken ct)
+    {
+        int inseridos = 0;
+        int atualizados = 0;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = new SqlCommand(@"
+            MERGE raw.Pessoa AS T
+            USING (
+                SELECT @PessoaId AS PessoaId, @Payload AS Payload, @Fonte AS Fonte
+            ) AS S
+            ON T.PessoaId = S.PessoaId
+            WHEN MATCHED THEN
+                UPDATE SET T.Payload = S.Payload, T.Fonte = S.Fonte, T.CarregadoEm = SYSDATETIME(), T.Processado = 0
+            WHEN NOT MATCHED THEN
+                INSERT (PessoaId, Payload, Fonte, Processado)
+                VALUES (S.PessoaId, S.Payload, S.Fonte, 0)
+            OUTPUT $action;", conn);
+
+        cmd.Parameters.Add("@PessoaId", SqlDbType.VarChar, 64);
+        cmd.Parameters.Add("@Payload", SqlDbType.NVarChar, -1);
+        cmd.Parameters.Add("@Fonte", SqlDbType.VarChar, 20);
+
+        foreach (var p in pessoas)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!p.TryGetProperty("id", out var idProp)) continue;
+            string? id = idProp.ValueKind == JsonValueKind.String
+                ? idProp.GetString()
+                : idProp.GetRawText();
+
+            if (string.IsNullOrWhiteSpace(id)) continue;
+
+            cmd.Parameters["@PessoaId"].Value = id;
+            cmd.Parameters["@Payload"].Value = p.GetRawText();
+            cmd.Parameters["@Fonte"].Value = fonte;
+
+            var acao = await cmd.ExecuteScalarAsync(ct) as string;
+            if (string.Equals(acao, "INSERT", StringComparison.OrdinalIgnoreCase))
+            {
+                inseridos++;
+            }
+            else if (string.Equals(acao, "UPDATE", StringComparison.OrdinalIgnoreCase))
+            {
+                atualizados++;
+            }
+        }
+
+        return (inseridos, atualizados);
+    }
+
     private async Task ExecutarProcessamentoCoreAsync(CancellationToken ct)
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync(ct);
         await using var cmd = new SqlCommand("core.usp_ProcessarTickets", conn)
+        {
+            CommandType = CommandType.StoredProcedure,
+            CommandTimeout = 300
+        };
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task ExecutarProcessamentoPessoasCoreAsync(CancellationToken ct)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand("core.usp_ProcessarPessoas", conn)
         {
             CommandType = CommandType.StoredProcedure,
             CommandTimeout = 300

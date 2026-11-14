@@ -80,7 +80,7 @@ SELECT
     ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
     ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
-    ISNULL(cli.Nome, N'Não Identificado') AS Cliente,
+    ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     t.DataCriacao,
     t.DataUltimaAcao,
     t.SlaAcordo,
@@ -110,6 +110,7 @@ FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
+LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
 WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
 GO
@@ -128,7 +129,7 @@ SELECT
     t.Assunto,
     ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
-    ISNULL(cli.Nome, N'Não Identificado') AS Cliente,
+    ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     t.Categoria,
     t.Urgencia,
     t.Status,
@@ -153,6 +154,7 @@ FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
+LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
 WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
 GO
@@ -256,7 +258,7 @@ LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Nome = r.Equipe;
 GO
 
 /* ----------------------------------------------------------------------------
-   6. mart.vw_ClienteRaioX (Inteligência e Saúde de Clientes)
+   6. mart.vw_ClienteRaioX (Inteligência e Saúde de Clientes — Foco em Empresas)
 ---------------------------------------------------------------------------- */
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
 AS
@@ -284,6 +286,8 @@ FROM core.Dim_Cliente c
 LEFT JOIN core.Fato_Ticket t ON c.ClienteId = t.EmpresaId
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 CROSS JOIN Parametros p
+WHERE ISNULL(c.TipoPessoa, 2) IN (2, 4)
+   OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId))
 GROUP BY c.ClienteId, c.Nome, c.RazaoSocial, p.DiasSilenciosoCritico;
 GO
 
