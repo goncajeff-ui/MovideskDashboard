@@ -30,6 +30,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -116,6 +117,13 @@ class SupersetApiClient:
                     err_body = exc.read().decode("utf-8", errors="replace")
                 except Exception:
                     pass
+                if exc.code in (502, 503, 504) and attempt < max_retries:
+                    print(
+                        f"[AVISO] HTTP {exc.code} transiente em {method.upper()} {path}. Nova tentativa em 3s...",
+                        flush=True,
+                    )
+                    time.sleep(3)
+                    continue
                 raise RuntimeError(
                     f"HTTP {exc.code} em {method.upper()} {path}: {err_body or exc.reason}"
                 ) from exc
@@ -144,13 +152,25 @@ class SupersetApiClient:
                     "provider": "db",
                     "refresh": True,
                 },
+                max_retries=5,
             )
         except RuntimeError as exc:
             if "HTTP 401" in str(exc):
-                superset_bin = os.path.expanduser("~/superset-env/bin/superset")
-                if os.path.isfile(superset_bin):
+                superset_bin = next(
+                    (
+                        candidate
+                        for candidate in (
+                            "/app/.venv/bin/superset",
+                            shutil.which("superset") or "",
+                            os.path.expanduser("~/superset-env/bin/superset"),
+                        )
+                        if candidate and os.path.isfile(candidate)
+                    ),
+                    None,
+                )
+                if superset_bin:
                     print(
-                        f"[INFO] Login retornou 401 para '{self.username}'. Sincronizando senha informada no Superset local (WSL2)...",
+                        f"[INFO] Login retornou 401 para '{self.username}'. Sincronizando senha informada no Superset ({superset_bin})...",
                         flush=True,
                     )
                     env = os.environ.copy()
@@ -1119,7 +1139,11 @@ def upsert_datasets(
                 )
                 ds_id = int(create_resp["id"])
             except Exception as ds_exc:
-                print(f"[ERRO] Falha ao registrar dataset 'mart.{view_name}' (Database ID={db_id}): {ds_exc}", flush=True)
+                print(
+                    f"[ERRO] Falha ao registrar dataset 'mart.{view_name}' (Database ID={db_id}): {ds_exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 raise
 
         detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
@@ -1173,18 +1197,27 @@ def upsert_datasets(
 
             try:
                 client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=update_payload)
-            except Exception:
+            except Exception as put_exc:
                 fallback_payload: Dict[str, Any] = {
                     "description": description,
                     "filter_select_enabled": True,
                 }
                 if main_dttm_col:
                     fallback_payload["main_dttm_col"] = main_dttm_col
-                client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=fallback_payload)
+                try:
+                    client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=fallback_payload)
+                except Exception as fb_exc:
+                    print(
+                        f"[AVISO] Passo 2/3 — Falha ao atualizar metadados de 'mart.{view_name}' (ID={ds_id}): {put_exc} | fallback: {fb_exc}",
+                        flush=True,
+                    )
 
             detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
-        except Exception:
-            pass
+        except Exception as meta_exc:
+            print(
+                f"[AVISO] Passo 2/3 — Erro ao sincronizar metadados/colunas de 'mart.{view_name}' (ID={ds_id}): {meta_exc}",
+                flush=True,
+            )
 
         cols_by_name = {
             c["column_name"]: c for c in detail.get("columns", []) if "column_name" in c
@@ -1283,11 +1316,20 @@ def upsert_chart(
         "params": json.dumps(params_copy, ensure_ascii=False),
     }
 
-    if chart_id > 0:
-        client.request("PUT", f"/api/v1/chart/{chart_id}", payload=payload, timeout=90, max_retries=1)
-    else:
-        create_resp = client.request("POST", "/api/v1/chart/", payload=payload, timeout=90, max_retries=1)
-        chart_id = int(create_resp["id"])
+    try:
+        if chart_id > 0:
+            client.request("PUT", f"/api/v1/chart/{chart_id}", payload=payload, timeout=90, max_retries=1)
+        else:
+            create_resp = client.request("POST", "/api/v1/chart/", payload=payload, timeout=90, max_retries=1)
+            chart_id = int(create_resp["id"])
+    except Exception as chart_exc:
+        action = f"atualizar (ID={chart_id})" if chart_id > 0 else "criar"
+        print(
+            f"[ERRO] Passo 3/3 — Falha ao {action} gráfico '{slice_name}' ({viz_type}, Dataset ID={ds_id}): {chart_exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
 
     chart_detail = client.request("GET", f"/api/v1/chart/{chart_id}", timeout=60).get("result", {})
     chart_uuid = chart_detail.get("uuid", "")
@@ -2255,7 +2297,7 @@ def main() -> int:
         print("=" * 76, flush=True)
         return 0
     except Exception as exc:
-        print(f"[ERRO] Falha durante o setup automático do Superset: {exc}", flush=True)
+        print(f"[ERRO] Falha durante o setup automático do Superset: {exc}", file=sys.stderr, flush=True)
         return 1
 
 

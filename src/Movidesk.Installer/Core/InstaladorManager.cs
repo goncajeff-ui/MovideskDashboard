@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace Movidesk.Installer.Core;
 
@@ -437,13 +439,20 @@ public sealed class InstaladorManager
             echo "[INF] Atualizando metadados internos (superset db upgrade)..."
             docker exec '{{c}}' superset db upgrade
 
-            echo "[INF] Criando usuário administrador '{{user}}' (se não existir)..."
-            docker exec '{{c}}' superset fab create-admin \
+            echo "[INF] Garantindo usuário administrador '{{user}}' e credenciais..."
+            ADMIN_OUT=$(docker exec '{{c}}' superset fab create-admin \
                 --username '{{user}}' \
                 --firstname 'Admin' \
                 --lastname 'Advice' \
                 --email '{{email}}' \
-                --password '{{pass}}' || true
+                --password '{{pass}}' 2>&1) || true
+            echo "$ADMIN_OUT"
+            if echo "$ADMIN_OUT" | grep -qiE 'already exists|error|failed'; then
+                echo "[INF] Sincronizando senha do usuário administrador '{{user}}' (reset-password)..."
+                docker exec '{{c}}' superset fab reset-password \
+                    --username '{{user}}' \
+                    --password '{{pass}}' || true
+            fi
 
             echo "[INF] Sincronizando permissões e roles padrão (superset init)..."
             docker exec '{{c}}' superset init
@@ -625,23 +634,20 @@ public sealed class InstaladorManager
                 await _wslEngine.GarantirRegrasFirewallAsync(log, ct);
             }
 
-            log.Aguardando("Validando estabilização do Apache Superset e REST API antes de importar o Dashboard...");
-            bool supersetOnline = await _wslEngine.AguardarHealthHttpAsync(
-                "http://localhost:8088/health",
+            log.Aguardando("Validando estabilização do Apache Superset e REST API (/health + login + csrf_token, até 90s)...");
+            bool supersetOnline = await _wslEngine.AguardarSupersetApiProntaAsync(
+                "http://localhost:8088",
+                config.SupersetUsuarioAdmin,
+                config.SupersetSenhaAdmin,
                 TimeSpan.FromSeconds(90),
                 log,
                 ct);
 
             if (!supersetOnline)
             {
-                throw new TimeoutException("O Apache Superset não respondeu em http://localhost:8088/health antes do deploy do Dashboard.");
+                throw new TimeoutException(
+                    "O Apache Superset não ficou pronto na REST API (http://localhost:8088 /health + login + csrf_token) após 90s antes do deploy do Dashboard.");
             }
-
-            await _wslEngine.AguardarHealthHttpAsync(
-                "http://localhost:8088/api/v1/security/csrf_token/",
-                TimeSpan.FromSeconds(30),
-                log,
-                ct);
 
             string setupScriptPy = _extrator.ObterRecursoTextoUtf8Lf("setup_superset_auto.py");
             string scriptPathWsl = $"{config.WslPastaSuperset}/setup_superset_auto.py";
@@ -679,23 +685,28 @@ public sealed class InstaladorManager
                 }
             }
 
+            int parsedSqlPort = int.TryParse(sqlPort, out int pPort) && pPort > 0 ? pPort : 1433;
             string sqlUser = Uri.EscapeDataString(config.SqlServerUsuario);
             string sqlPass = Uri.EscapeDataString(config.SqlServerSenha);
             string sqlDb = Uri.EscapeDataString(config.SqlServerBanco);
-            string sqlUserRaw = EscaparArgBashSimples(config.SqlServerUsuario);
-            string sqlPassRaw = EscaparArgBashSimples(config.SqlServerSenha);
             string sqlDbRaw = EscaparArgBashSimples(config.SqlServerBanco);
             string containerName = EscaparArgBashSimples(config.NomeConteinerSuperset);
 
             string probeCode =
-                "import sys, pymssql\n" +
-                "user, password, database, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])\n" +
-                "candidates = sys.argv[5:]\n" +
+                "import base64, json, sys, pymssql\n" +
+                "cfg = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))\n" +
+                "wsl_ips = [x.strip() for x in sys.argv[2:] if x and x.strip()]\n" +
+                "static_hosts = ['host.docker.internal', '127.0.0.1', 'localhost', '172.20.48.1', '172.29.112.1']\n" +
+                "if cfg.get('explicit_host'):\n" +
+                "    raw_order = [cfg['explicit_host']] + wsl_ips + static_hosts\n" +
+                "else:\n" +
+                "    raw_order = wsl_ips + static_hosts\n" +
+                "seen = set()\n" +
+                "candidates = [h for h in raw_order if h and not (h in seen or seen.add(h))]\n" +
                 "found = None\n" +
                 "for h in candidates:\n" +
-                "    if not h: continue\n" +
                 "    try:\n" +
-                "        conn = pymssql.connect(server=h, port=port, user=user, password=password, database=database, login_timeout=4)\n" +
+                "        conn = pymssql.connect(server=h, port=int(cfg['port']), user=cfg['user'], password=cfg['password'], database=cfg['database'], login_timeout=4)\n" +
                 "        cur = conn.cursor()\n" +
                 "        cur.execute('SELECT 1')\n" +
                 "        cur.fetchone()\n" +
@@ -704,9 +715,20 @@ public sealed class InstaladorManager
                 "        print(f'[OK_SQL_HOST]{h}')\n" +
                 "        break\n" +
                 "    except Exception as e:\n" +
-                "        print(f'[DEBUG_HOST] Conexao com {h}:{port} falhou: {e}', file=sys.stderr)\n" +
+                "        print(f'[DEBUG_HOST] Conexao com {h}:{cfg[\"port\"]} falhou: {e}', file=sys.stderr)\n" +
                 "if not found:\n" +
                 "    sys.exit(1)\n";
+
+            string pyCodeB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(probeCode));
+            string cfgJson = JsonSerializer.Serialize(new
+            {
+                user = config.SqlServerUsuario,
+                password = config.SqlServerSenha,
+                database = config.SqlServerBanco,
+                port = parsedSqlPort,
+                explicit_host = sqlHostExplicit
+            });
+            string cfgJsonB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(cfgJson));
 
             // Descobre IP do host Windows alcançável pelo WSL2/Docker executando teste pymssql de dentro do contêiner
             string scriptDeploy = $$"""
@@ -714,25 +736,22 @@ public sealed class InstaladorManager
 
                 {{WslEngine.ScriptIsolamentoDockerBash}}
 
-                EXPLICIT_HOST="{{EscaparArgBashSimples(sqlHostExplicit)}}"
-                SQL_PORT="{{sqlPort}}"
-
-                CANDIDATES=()
-                [ -n "$EXPLICIT_HOST" ] && CANDIDATES+=("$EXPLICIT_HOST")
+                SQL_PORT="{{parsedSqlPort}}"
                 ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-                [ -n "$ROUTE_IP" ] && CANDIDATES+=("$ROUTE_IP")
                 NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
-                [ -n "$NS_IP" ] && CANDIDATES+=("$NS_IP")
-                CANDIDATES+=("host.docker.internal" "127.0.0.1" "localhost" "172.20.48.1" "172.29.112.1")
 
-                echo "[INF] Testando conectividade direta com SQL Server a partir do contêiner '{{containerName}}'..."
+                PY_BIN=$(docker exec '{{containerName}}' sh -c 'if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi')
+                if [ -z "$PY_BIN" ]; then
+                    echo "[ERRO] Interpretador Python não encontrado dentro do contêiner '{{containerName}}'." >&2
+                    exit 1
+                fi
 
-                PROBE_OUT=$(docker exec '{{containerName}}' /app/.venv/bin/python -c '{{EscaparArgBashSimples(probeCode)}}' \
-                    '{{sqlUserRaw}}' \
-                    '{{sqlPassRaw}}' \
-                    '{{sqlDbRaw}}' \
-                    "$SQL_PORT" \
-                    "${CANDIDATES[@]}" 2>&1 || true)
+                echo "[INF] Testando conectividade direta com SQL Server a partir do contêiner '{{containerName}}' ($PY_BIN)..."
+
+                PROBE_OUT=$(docker exec '{{containerName}}' "$PY_BIN" -c "import base64; exec(base64.b64decode('{{pyCodeB64}}').decode('utf-8'))" \
+                    "{{cfgJsonB64}}" \
+                    "$ROUTE_IP" \
+                    "$NS_IP" 2>&1 || true)
 
                 TARGET_HOST=$(echo "$PROBE_OUT" | awk -F'\\[OK_SQL_HOST\\]' '/\\[OK_SQL_HOST\\]/ {print $2; exit}')
 
@@ -741,7 +760,7 @@ public sealed class InstaladorManager
                     DEFAULT_TEST="$ROUTE_IP"
                     [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="$NS_IP"
                     [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="172.20.48.1"
-                    echo "[AVISO] SQL Server porta $SQL_PORT ou banco '{{sqlDbRaw}}' não acessível de dentro do contêiner nos endereços testados (${CANDIDATES[*]})."
+                    echo "[AVISO] SQL Server porta $SQL_PORT ou banco '{{sqlDbRaw}}' não acessível de dentro do contêiner nos endereços testados."
                     echo "[AVISO] Endereço provável do Windows: $DEFAULT_TEST. Verifique se o serviço do SQL Server está ativo com TCP/IP e se o firewall permite conexões."
                     exit 42
                 fi
@@ -751,7 +770,7 @@ public sealed class InstaladorManager
                 DB_URI="mssql+pymssql://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}"
 
                 docker cp '{{EscaparArgBashSimples(scriptPathWsl)}}' '{{containerName}}:/tmp/setup_superset_auto.py'
-                docker exec '{{containerName}}' /app/.venv/bin/python /tmp/setup_superset_auto.py \
+                docker exec '{{containerName}}' "$PY_BIN" /tmp/setup_superset_auto.py \
                     --url "http://127.0.0.1:8088" \
                     --username '{{userSuperset}}' \
                     --password '{{passSuperset}}' \

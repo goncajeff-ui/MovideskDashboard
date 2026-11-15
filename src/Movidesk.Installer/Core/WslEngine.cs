@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.NetworkInformation;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Movidesk.Installer.Core;
@@ -593,9 +596,22 @@ public sealed class WslEngine
                 .Where(l => !string.IsNullOrWhiteSpace(l) && (!removerRuidoDocker || !EhLinhaRuidoProgressoDocker(l)))
                 .ToArray();
 
-        string[] linhas = !string.IsNullOrWhiteSpace(res.StdErr)
+        string[] errLinhas = !string.IsNullOrWhiteSpace(res.StdErr)
             ? FiltrarLinhas(res.StdErr, removerRuidoDocker: true)
             : [];
+
+        string[] outErroLinhas = !string.IsNullOrWhiteSpace(res.StdOut)
+            ? FiltrarLinhas(res.StdOut, removerRuidoDocker: true)
+                .Where(l => l.Contains("[ERRO]", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("HTTP ", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                            l.Contains("Exception", StringComparison.OrdinalIgnoreCase))
+                .ToArray()
+            : [];
+
+        string[] linhas = errLinhas.Length > 0 && outErroLinhas.Length > 0 && !errLinhas.Any(l => l.Contains("[ERRO]", StringComparison.OrdinalIgnoreCase))
+            ? [.. outErroLinhas, .. errLinhas]
+            : errLinhas;
 
         if (linhas.Length == 0 && !string.IsNullOrWhiteSpace(res.StdOut))
         {
@@ -715,26 +731,156 @@ public sealed class WslEngine
         AuditorLog log,
         CancellationToken ct)
     {
+        string normalized = urlHealth.Trim();
+        string[] candidateUrls = normalized.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
+            ? [normalized, normalized.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
+            : [normalized];
+
         DateTime limite = DateTime.UtcNow.Add(tempoMaximo);
         while (DateTime.UtcNow < limite)
         {
             ct.ThrowIfCancellationRequested();
-            try
+            foreach (string url in candidateUrls)
             {
-                using HttpResponseMessage resp = await HttpProbeClient.GetAsync(urlHealth, ct);
-                if (resp.IsSuccessStatusCode)
+                try
                 {
-                    log.Sucesso($"Apache Superset respondendo HTTP 200 em {urlHealth}");
-                    return true;
+                    using HttpResponseMessage resp = await HttpProbeClient.GetAsync(url, ct);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        log.Sucesso($"Apache Superset respondendo HTTP {(int)resp.StatusCode} em {url}");
+                        return true;
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // Continua aguardando subida do gunicorn/flask no contêiner
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Valida diretamente pelo host Windows (via HttpClient com CookieContainer) se o Apache Superset
+    /// está respondendo /health, aceitando login JWT em /api/v1/security/login e emitindo CSRF token
+    /// em /api/v1/security/csrf_token/ antes de disparar o provisionamento do Dashboard na Etapa 4.
+    /// </summary>
+    public async Task<bool> AguardarSupersetApiProntaAsync(
+        string baseUrl,
+        string username,
+        string password,
+        TimeSpan tempoMaximo,
+        AuditorLog log,
+        CancellationToken ct)
+    {
+        string trimmed = baseUrl.Trim().TrimEnd('/');
+        string[] candidateBases = trimmed.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
+            ? [trimmed, trimmed.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
+            : [trimmed];
+
+        var cookieContainer = new CookieContainer();
+        using var handler = new HttpClientHandler
+        {
+            UseCookies = true,
+            CookieContainer = cookieContainer
+        };
+        using var apiClient = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+        apiClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+        string loginPayloadJson = JsonSerializer.Serialize(new
+        {
+            username,
+            password,
+            provider = "db",
+            refresh = true
+        });
+
+        DateTime limite = DateTime.UtcNow.Add(tempoMaximo);
+        int tentativa = 0;
+
+        while (DateTime.UtcNow < limite)
+        {
+            ct.ThrowIfCancellationRequested();
+            tentativa++;
+
+            foreach (string candidate in candidateBases)
             {
-                throw;
+                try
+                {
+                    using var healthResp = await apiClient.GetAsync($"{candidate}/health", ct);
+                    if (!healthResp.IsSuccessStatusCode)
+                    {
+                        continue;
+                    }
+
+                    using var loginReq = new HttpRequestMessage(HttpMethod.Post, $"{candidate}/api/v1/security/login")
+                    {
+                        Content = new StringContent(loginPayloadJson, Encoding.UTF8, "application/json")
+                    };
+                    using var loginResp = await apiClient.SendAsync(loginReq, ct);
+
+                    if (loginResp.StatusCode == HttpStatusCode.Unauthorized)
+                    {
+                        log.Aviso($"REST API do Apache Superset ativa em {candidate} (login retornou HTTP 401; prosseguindo para sincronização de credenciais).");
+                        return true;
+                    }
+
+                    if (!loginResp.IsSuccessStatusCode)
+                    {
+                        continue;
+                    }
+
+                    string loginBody = await loginResp.Content.ReadAsStringAsync(ct);
+                    string? accessToken = null;
+                    if (!string.IsNullOrWhiteSpace(loginBody))
+                    {
+                        using var doc = JsonDocument.Parse(loginBody);
+                        if (doc.RootElement.TryGetProperty("access_token", out JsonElement tokEl) &&
+                            tokEl.ValueKind == JsonValueKind.String)
+                        {
+                            accessToken = tokEl.GetString();
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(accessToken))
+                    {
+                        continue;
+                    }
+
+                    using var csrfReq = new HttpRequestMessage(HttpMethod.Get, $"{candidate}/api/v1/security/csrf_token/");
+                    csrfReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                    csrfReq.Headers.Referrer = new Uri($"{candidate}/");
+                    using var csrfResp = await apiClient.SendAsync(csrfReq, ct);
+
+                    if (csrfResp.IsSuccessStatusCode)
+                    {
+                        log.Sucesso($"Apache Superset pronto e REST API validada (/health + login JWT + CSRF HTTP {(int)csrfResp.StatusCode}) em {candidate}");
+                        return true;
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    // Gunicorn/Flask ainda iniciando workers após restart; aguarda próximo ciclo
+                }
             }
-            catch
+
+            if (tentativa == 1 || tentativa % 5 == 0)
             {
-                // Continua aguardando subida do gunicorn/flask no contêiner
+                log.Aguardando($"Aguardando workers REST API/CSRF do Apache Superset estabilizarem (tentativa {tentativa})...");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2), ct);

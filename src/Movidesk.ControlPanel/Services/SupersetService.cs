@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 
 namespace Movidesk.ControlPanel.Services;
@@ -31,6 +32,7 @@ public sealed class SupersetService : IDisposable
     private readonly int _port;
     private readonly string _supersetUrl;
     private readonly string _supersetDbUri;
+    private readonly string? _sqlConnectionString;
     private readonly bool _hasExplicitDbUri;
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(3) };
@@ -79,6 +81,7 @@ public sealed class SupersetService : IDisposable
         _secretKey = configuration["Superset:SecretKey"] ?? "movidesk_superset_super_secret_key_2026";
         _port = int.TryParse(configuration["Superset:Port"], out var parsedPort) ? parsedPort : 8088;
         _supersetUrl = (configuration["Superset:Url"] ?? $"http://localhost:{_port}").TrimEnd('/');
+        _sqlConnectionString = configuration.GetConnectionString("MovideskDM");
         string? configuredDbUri = configuration["Superset:SqlAlchemyUri"];
         _hasExplicitDbUri = !string.IsNullOrWhiteSpace(configuredDbUri);
         _supersetDbUri = string.IsNullOrWhiteSpace(configuredDbUri)
@@ -208,20 +211,35 @@ public sealed class SupersetService : IDisposable
         }
         NotifyStateChanged();
 
+        const string dockerEnvPrefix =
+            "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"; " +
+            "unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH || true; " +
+            "export DOCKER_CONFIG=\"/root/.docker-advice\"; mkdir -p \"$DOCKER_CONFIG\"; ";
+
         string comandoSuperset =
+            dockerEnvPrefix +
             "if command -v docker >/dev/null 2>&1; then " +
-            "service docker status >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true; " +
-            "if docker ps -a --format '{{.Names}}' | grep -Eq '^(advice_movidesk_superset|superset-movidesk)$'; then " +
-            "docker start advice_movidesk_superset 2>/dev/null || docker start superset-movidesk 2>/dev/null; " +
+            "if ! docker info >/dev/null 2>&1; then " +
+            "systemctl start docker >/dev/null 2>&1 || service docker status >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true; " +
+            "for _i in 1 2 3 4 5 6 7 8 9 10; do docker info >/dev/null 2>&1 && break; sleep 1; done; " +
+            "fi; " +
+            $"if docker ps -a --format '{{{{.Names}}}}' | grep -Eq '^({_containerName}|advice_movidesk_superset|superset-movidesk)$'; then " +
+            $"docker start {_containerName} 2>/dev/null || docker start advice_movidesk_superset 2>/dev/null || docker start superset-movidesk 2>/dev/null; " +
             $"elif [ -d '{_composePath}' ] && [ -f '{_composePath}/docker-compose.yml' ]; then " +
-            $"(cd {_composePath} && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
+            $"(cd '{_composePath}' && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
             "elif [ -d '/opt/advice-movidesk-superset' ] && [ -f '/opt/advice-movidesk-superset/docker-compose.yml' ]; then " +
             "(cd /opt/advice-movidesk-superset && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
             "elif [ -d '/opt/movidesk-superset' ] && [ -f '/opt/movidesk-superset/docker-compose.yml' ]; then " +
             "(cd /opt/movidesk-superset && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
+            "else " +
+            "echo '[AVISO] Contêiner Docker advice_movidesk_superset não encontrado no WSL.'; " +
             "fi; " +
+            $"elif timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/{_port}' 2>/dev/null; then " +
+            $"echo '[OK] Porta {_port} já está em uso por instância Superset ativa.'; " +
             "elif [ -f ~/superset-env/bin/activate ]; then " +
             "source ~/superset-env/bin/activate && export SUPERSET_SECRET_KEY='movidesk_superset_super_secret_key_2026' && export FLASK_APP=superset && nohup superset run -h 0.0.0.0 -p 8088 --with-threads >/tmp/superset.log 2>&1 & " +
+            "else " +
+            "echo '[ERRO] Docker e venv Superset não encontrados no WSL.' >&2; exit 1; " +
             "fi || true";
 
         AppendLog($"Executando WSL ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)} - Docker Engine)...");
@@ -333,11 +351,14 @@ public sealed class SupersetService : IDisposable
             }
 
             string comandoStop =
+                "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"; " +
+                "unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH || true; " +
+                "export DOCKER_CONFIG=\"/root/.docker-advice\"; " +
                 "if command -v docker >/dev/null 2>&1; then " +
-                "docker stop advice_movidesk_superset 2>/dev/null || " +
                 $"docker stop {_containerName} 2>/dev/null || " +
+                "docker stop advice_movidesk_superset 2>/dev/null || " +
                 "docker stop superset-movidesk 2>/dev/null || " +
-                $"(cd {_composePath} 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
+                $"(cd '{_composePath}' 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
                 "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || true; " +
                 "fi; " +
                 "pkill -f '[s]uperset run' 2>/dev/null || true";
@@ -446,28 +467,30 @@ public sealed class SupersetService : IDisposable
         {
             AppendSetupLog("[INF] Iniciando automação nativa em C# (comunicação HTTP direta com Apache Superset, sem uso de terminal/WSL)...");
 
-            if (!await ProbeHealthEndpointAsync())
+            string? reachableBaseUrl = await FindHealthyBaseUrlAsync();
+            if (reachableBaseUrl is null)
             {
                 AppendSetupLog($"[AVISO] Superset não respondeu em {_supersetUrl}/health. Tentando iniciar servidor automaticamente...");
                 await StartSupersetAsync();
-                for (int i = 0; i < 25; i++)
+                for (int i = 0; i < 60; i++) // até 90s aguardando /health
                 {
                     await Task.Delay(1500);
-                    if (await ProbeHealthEndpointAsync())
+                    reachableBaseUrl = await FindHealthyBaseUrlAsync();
+                    if (reachableBaseUrl is not null)
                     {
                         break;
                     }
                 }
 
-                if (!await ProbeHealthEndpointAsync())
+                if (reachableBaseUrl is null)
                 {
                     throw new InvalidOperationException(
-                        $"O Apache Superset não está respondendo em {_supersetUrl}/health. " +
-                        "Certifique-se de que o Superset está online no Card 1 ('Iniciar Superset') antes de executar o setup.");
+                        $"O Apache Superset não está respondendo em {_supersetUrl}/health após 90s. " +
+                        "Certifique-se de que o contêiner Docker está online no Card 1 ('Iniciar Superset') antes de executar o setup.");
                 }
             }
 
-            AppendSetupLog($"[OK] Servidor Apache Superset online em {_supersetUrl}.");
+            AppendSetupLog($"[OK] Servidor Apache Superset online em {reachableBaseUrl}.");
 
             var cookieContainer = new CookieContainer();
             using var handler = new HttpClientHandler
@@ -477,13 +500,13 @@ public sealed class SupersetService : IDisposable
             };
             using var apiClient = new HttpClient(handler)
             {
-                BaseAddress = new Uri(_supersetUrl),
+                BaseAddress = new Uri(reachableBaseUrl),
                 Timeout = TimeSpan.FromMinutes(5)
             };
             apiClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            apiClient.DefaultRequestHeaders.Referrer = new Uri($"{_supersetUrl}/");
+            apiClient.DefaultRequestHeaders.Referrer = new Uri($"{reachableBaseUrl}/");
 
-            // 1. Autenticação JWT + CSRF Token
+            // 1. Autenticação JWT + CSRF Token (com retry caso os workers Gunicorn estejam finalizando o boot)
             string username = string.IsNullOrWhiteSpace(adminUsername) ? "admin" : adminUsername.Trim();
             string accessToken = await AuthenticateSupersetAsync(apiClient, username, adminPassword);
             apiClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -497,25 +520,27 @@ public sealed class SupersetService : IDisposable
 
             AppendSetupLog($"[OK] Autenticado na REST API do Superset ({_supersetUrl}) como '{username}'.");
 
-            // 2. Passo 1/3: Criar ou Atualizar Database MovideskDM
-            var (sqlUser, sqlPass, sqlDb, sqlPort, configuredHost) = ParseDbCredentials();
-            string targetDbUri = _supersetDbUri;
+            // 2. Passo 1/3: Validar conexão real com SQL Server DE DENTRO do contêiner antes de criar Database/Datasets
+            var (sqlUser, sqlPass, sqlDb, sqlPort, configuredHost, isRemoteHost) = ParseDbCredentials();
+            string targetDbUri = _hasExplicitDbUri
+                ? _supersetDbUri
+                : $"mssql+pymssql://{Uri.EscapeDataString(sqlUser)}:{Uri.EscapeDataString(sqlPass)}@{configuredHost}:{sqlPort}/{Uri.EscapeDataString(sqlDb)}";
 
-            AppendSetupLog("[INF] Passo 1/3 — Validando conectividade com SQL Server de dentro do contêiner Docker...");
+            AppendSetupLog("[INF] Passo 1/3 — Validando conectividade real com SQL Server (pymssql) de dentro do contêiner Docker...");
             string? workingHost = await ProbeWorkingSqlHostInsideContainerAsync(
-                sqlUser, sqlPass, sqlDb, sqlPort, [configuredHost]);
+                sqlUser, sqlPass, sqlDb, sqlPort, configuredHost, isRemoteHost);
 
             if (!string.IsNullOrWhiteSpace(workingHost))
             {
                 targetDbUri = $"mssql+pymssql://{Uri.EscapeDataString(sqlUser)}:{Uri.EscapeDataString(sqlPass)}@{workingHost}:{sqlPort}/{Uri.EscapeDataString(sqlDb)}";
-                AppendSetupLog($"[OK] Conexão com SQL Server validada com sucesso de dentro do contêiner em: {workingHost}:{sqlPort} (driver pymssql).");
+                AppendSetupLog($"[OK] Conexão SQL Server validada de dentro do contêiner em '{workingHost}:{sqlPort}' (banco '{sqlDb}').");
             }
             else
             {
-                AppendSetupLog($"[AVISO] Teste interno de SQL Server não detectou host alternativo; utilizando URI configurada: {targetDbUri}");
+                AppendSetupLog($"[AVISO] Nenhum endereço respondeu ao teste pymssql interno; prosseguindo com host '{configuredHost}:{sqlPort}'.");
             }
 
-            AppendSetupLog($"[INF] Passo 1/3 — Configurando conexão Database 'MovideskDM' no Superset...");
+            AppendSetupLog("[INF] Passo 1/3 — Registrando/atualizando conexão Database 'MovideskDM' no Superset...");
             int dbId = await UpsertDatabaseAsync(apiClient, "MovideskDM", targetDbUri);
 
             // 3. Passo 2/3: Criar ou Sincronizar os 9 Datasets do schema mart
@@ -550,17 +575,18 @@ public sealed class SupersetService : IDisposable
         }
     }
 
-    private (string User, string Pass, string Database, int Port, string Host) ParseDbCredentials()
+    private (string User, string Pass, string Database, int Port, string Host, bool IsRemoteHost) ParseDbCredentials()
     {
         string user = "sa";
         string pass = "123456";
         string database = "MovideskDM";
         int port = 1433;
         string host = "127.0.0.1";
+        bool isRemote = false;
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(_supersetDbUri))
+            if (_hasExplicitDbUri && !string.IsNullOrWhiteSpace(_supersetDbUri))
             {
                 string pseudo = _supersetDbUri
                     .Replace("mssql+pymssql://", "http://")
@@ -577,6 +603,41 @@ public sealed class SupersetService : IDisposable
                     if (uri.Port > 0) port = uri.Port;
                     string dbPart = uri.AbsolutePath.Trim('/');
                     if (!string.IsNullOrWhiteSpace(dbPart)) database = Uri.UnescapeDataString(dbPart);
+                    isRemote = !EhHostLocal(host);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(_sqlConnectionString))
+            {
+                var builder = new SqlConnectionStringBuilder(_sqlConnectionString);
+                if (!string.IsNullOrWhiteSpace(builder.UserID)) user = builder.UserID;
+                if (!string.IsNullOrEmpty(builder.Password)) pass = builder.Password;
+                if (!string.IsNullOrWhiteSpace(builder.InitialCatalog)) database = builder.InitialCatalog;
+
+                string rawServer = builder.DataSource?.Trim() ?? "localhost";
+                string hostSemInstancia = rawServer.Split('\\')[0];
+                int sepIdx = hostSemInstancia.IndexOfAny([',', ':']);
+                if (sepIdx > 0)
+                {
+                    host = hostSemInstancia[..sepIdx].Trim();
+                    string possiblePort = hostSemInstancia[(sepIdx + 1)..].Trim();
+                    if (int.TryParse(possiblePort, out int parsedPort) && parsedPort > 0)
+                    {
+                        port = parsedPort;
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(hostSemInstancia))
+                {
+                    host = hostSemInstancia;
+                }
+
+                if (EhHostLocal(host))
+                {
+                    host = "127.0.0.1";
+                    isRemote = false;
+                }
+                else
+                {
+                    isRemote = true;
                 }
             }
         }
@@ -585,7 +646,19 @@ public sealed class SupersetService : IDisposable
             // Mantém valores padrão
         }
 
-        return (user, pass, database, port, host);
+        return (user, pass, database, port, host, isRemote);
+    }
+
+    private static bool EhHostLocal(string rawHost)
+    {
+        if (string.IsNullOrWhiteSpace(rawHost)) return true;
+        string h = rawHost.Trim();
+        return h.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || h.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || h.Equals(".", StringComparison.OrdinalIgnoreCase)
+            || h.Equals("(local)", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith("localhost\\", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith(".\\", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<string?> ProbeWorkingSqlHostInsideContainerAsync(
@@ -593,7 +666,8 @@ public sealed class SupersetService : IDisposable
         string password,
         string database,
         int port,
-        IEnumerable<string> candidateHosts,
+        string configuredHost,
+        bool isRemoteHost,
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows())
@@ -603,38 +677,60 @@ public sealed class SupersetService : IDisposable
 
         try
         {
-            var hostsList = candidateHosts.Where(h => !string.IsNullOrWhiteSpace(h)).Distinct().ToList();
-            string escapedUser = user.Replace("\"", "\\\"");
-            string escapedPass = password.Replace("\"", "\\\"");
-            string escapedDb = database.Replace("\"", "\\\"");
+            const string pyCode = """
+import base64, json, sys, pymssql
+cfg = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+wsl_ips = [x.strip() for x in sys.argv[2:] if x and x.strip()]
+if cfg.get('is_remote') and cfg.get('configured_host'):
+    raw_order = [cfg['configured_host']] + wsl_ips + ['host.docker.internal', '127.0.0.1']
+else:
+    raw_order = wsl_ips + ['host.docker.internal', '127.0.0.1', cfg.get('configured_host', '')]
+seen = set()
+ordered = [h for h in raw_order if h and not (h in seen or seen.add(h))]
+for h in ordered:
+    try:
+        conn = pymssql.connect(
+            server=h,
+            port=int(cfg['port']),
+            user=cfg['user'],
+            password=cfg['password'],
+            database=cfg['database'],
+            login_timeout=4
+        )
+        cur = conn.cursor()
+        cur.execute('SELECT 1')
+        cur.fetchone()
+        conn.close()
+        print(f'[SQL_HOST_OK]{h}')
+        sys.exit(0)
+    except Exception as e:
+        print(f'[SQL_HOST_ERR]{h}: {e}', file=sys.stderr)
+sys.exit(1)
+""";
 
-            string inlinePy =
-                "import sys, pymssql\\n" +
-                "u, p, db, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])\\n" +
-                "candidates = sys.argv[5:]\\n" +
-                "found = None\\n" +
-                "for h in candidates:\\n" +
-                "    if not h: continue\\n" +
-                "    try:\\n" +
-                "        c = pymssql.connect(server=h, port=port, user=u, password=p, database=db, login_timeout=3)\\n" +
-                "        cur = c.cursor()\\n" +
-                "        cur.execute('SELECT 1')\\n" +
-                "        cur.fetchone()\\n" +
-                "        c.close()\\n" +
-                "        print(f'[SQL_HOST_OK]{h}')\\n" +
-                "        found = h\\n" +
-                "        break\\n" +
-                "    except Exception as e:\\n" +
-                "        pass\\n" +
-                "sys.exit(0 if found else 1)";
+            string pyCodeB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(pyCode.Replace("\r\n", "\n")));
+            string cfgJson = JsonSerializer.Serialize(new
+            {
+                user,
+                password,
+                database,
+                port,
+                configured_host = configuredHost,
+                is_remote = isRemoteHost
+            });
+            string cfgJsonB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(cfgJson));
 
             string probeScript =
+                "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"; " +
+                "unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH || true; " +
+                "export DOCKER_CONFIG=\"/root/.docker-advice\"; " +
                 "ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}'); " +
                 "NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true); " +
-                $"docker exec {_containerName} /app/.venv/bin/python -c \"{inlinePy}\" " +
-                $"\"{escapedUser}\" \"{escapedPass}\" \"{escapedDb}\" \"{port}\" " +
-                "\"$ROUTE_IP\" \"$NS_IP\" \"host.docker.internal\" \"127.0.0.1\" \"172.20.48.1\" \"172.29.112.1\" " +
-                string.Join(" ", hostsList.Select(h => $"\"{h}\""));
+                $"CN=$(docker ps --format '{{{{.Names}}}}' | grep -E '^({_containerName}|advice_movidesk_superset|superset-movidesk)$' | head -n 1 || true); " +
+                "[ -n \"$CN\" ] || { echo '[AVISO] Nenhum contêiner Superset em execução encontrado no Docker.' >&2; exit 1; }; " +
+                "PY_BIN=$(docker exec \"$CN\" sh -c 'if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi'); " +
+                "[ -n \"$PY_BIN\" ] || { echo '[AVISO] Interpretador Python não encontrado no contêiner.' >&2; exit 1; }; " +
+                $"docker exec \"$CN\" \"$PY_BIN\" -c \"import base64; exec(base64.b64decode('{pyCodeB64}').decode('utf-8'))\" \"{cfgJsonB64}\" \"$ROUTE_IP\" \"$NS_IP\"";
 
             var psi = new ProcessStartInfo
             {
@@ -658,9 +754,12 @@ public sealed class SupersetService : IDisposable
 
             using var proc = new Process { StartInfo = psi };
             var output = new StringBuilder();
+            var errorOutput = new StringBuilder();
             proc.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+            proc.ErrorDataReceived += (_, e) => { if (e.Data != null) errorOutput.AppendLine(e.Data); };
             proc.Start();
             proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
             await proc.WaitForExitAsync(cancellationToken);
 
             string outStr = output.ToString();
@@ -673,6 +772,15 @@ public sealed class SupersetService : IDisposable
                 if (!string.IsNullOrWhiteSpace(host))
                 {
                     return host;
+                }
+            }
+
+            string errStr = errorOutput.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(errStr))
+            {
+                foreach (string errLine in errStr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    AppendSetupLog($"[DIAG] {errLine}");
                 }
             }
         }
@@ -694,7 +802,36 @@ public sealed class SupersetService : IDisposable
             ["refresh"] = true
         };
 
-        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Post, "/api/v1/security/login", loginPayload, timeoutSeconds: 60);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(45);
+        HttpStatusCode status = 0;
+        string body = string.Empty;
+
+        while (true)
+        {
+            try
+            {
+                (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Post, "/api/v1/security/login", loginPayload, timeoutSeconds: 30, maxRetries: 0);
+                if (status != HttpStatusCode.BadGateway &&
+                    status != HttpStatusCode.ServiceUnavailable &&
+                    status != HttpStatusCode.GatewayTimeout &&
+                    status != HttpStatusCode.NotFound)
+                {
+                    break;
+                }
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+                // Continua tentando enquanto o worker Flask/Gunicorn termina a inicialização
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            await Task.Delay(2000);
+        }
+
         if (status == HttpStatusCode.Unauthorized)
         {
             throw new InvalidOperationException(
@@ -2107,16 +2244,38 @@ public sealed class SupersetService : IDisposable
     }
 
     private async Task<bool> ProbeHealthEndpointAsync(CancellationToken ct = default)
+        => await FindHealthyBaseUrlAsync(ct) is not null;
+
+    private async Task<string?> FindHealthyBaseUrlAsync(CancellationToken ct = default)
     {
-        try
+        string baseUrl = _supersetUrl.TrimEnd('/');
+        string[] candidateUrls = baseUrl.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
+            ? [baseUrl, baseUrl.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
+            : [baseUrl];
+
+        foreach (string url in candidateUrls)
         {
-            using var resp = await _httpClient.GetAsync($"{_supersetUrl.TrimEnd('/')}/health", ct);
-            return resp.IsSuccessStatusCode;
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+                using var resp = await _httpClient.GetAsync($"{url}/health", timeoutCts.Token);
+                if (resp.IsSuccessStatusCode)
+                {
+                    return url;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // Continua para o próximo endereço candidato
+            }
         }
-        catch
-        {
-            return false;
-        }
+
+        return null;
     }
 
     private void AppendLog(string message)
