@@ -429,8 +429,47 @@ LEFT JOIN core.Fato_CampoCustomizado cf ON t.TicketId = cf.TicketId AND cf.Campo
 GROUP BY ISNULL(t.Equipe, N'Sem Equipe'), ISNULL(t.ServicoN1, N'Não Informado'), t.Categoria, t.Urgencia, ISNULL(cf.Valor, N'Não Informada');
 """
         )
+        cur.execute(
+            """
+CREATE OR ALTER VIEW mart.vw_ClienteRaioX
+AS
+WITH Parametros AS (
+    SELECT
+        ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+)
+SELECT 
+    c.ClienteId,
+    c.Nome AS Cliente,
+    c.RazaoSocial,
+    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    COUNT(t.TicketId) AS TotalTicketsHistorico,
+    COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
+    COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
+    CAST(ROUND(100.0 * COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) 
+        / NULLIF(COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
+    MAX(t.DataCriacao) AS DataUltimoTicket,
+    DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) AS DiasDesdeUltimoTicket,
+    CASE 
+        WHEN MAX(t.DataCriacao) IS NULL OR DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
+        WHEN DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
+        ELSE 'Ativo (< 30d)'
+    END AS StatusRelacionamento
+FROM core.Dim_Cliente c
+LEFT JOIN core.Fato_Ticket t ON c.ClienteId = t.EmpresaId
+LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+CROSS JOIN Parametros p
+WHERE ISNULL(c.TipoPessoa, 2) IN (2, 4)
+   OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId))
+GROUP BY
+    c.ClienteId,
+    c.Nome,
+    c.RazaoSocial,
+    ISNULL(t.Equipe, N'Sem Equipe'),
+    p.DiasSilenciosoCritico;
+"""
+        )
         conn.close()
-        print("[OK] Views do schema 'mart' sincronizadas no SQL Server (incluindo coluna Servico).")
+        print("[OK] Views do schema 'mart' sincronizadas no SQL Server (Servico + vw_ClienteRaioX por Equipe).", flush=True)
     except Exception:
         pass
 
@@ -456,12 +495,12 @@ def upsert_database(client: SupersetApiClient, db_name: str, db_uri: str) -> int
 
     if existing_id is not None:
         client.request("PUT", f"/api/v1/database/{existing_id}", payload=payload)
-        print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com sucesso.")
+        print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com sucesso.", flush=True)
         return existing_id
 
     create_resp = client.request("POST", "/api/v1/database/", payload=payload)
     db_id = int(create_resp["id"])
-    print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={db_id}) criada com sucesso.")
+    print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={db_id}) criada com sucesso.", flush=True)
     return db_id
 
 
@@ -498,17 +537,39 @@ def upsert_datasets(
             )
             ds_id = int(create_resp["id"])
 
+        detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
+
         if main_dttm_col:
             try:
-                client.request(
-                    "PUT",
-                    f"/api/v1/dataset/{ds_id}",
-                    payload={"main_dttm_col": main_dttm_col, "description": description},
+                update_payload: Dict[str, Any] = {
+                    "main_dttm_col": main_dttm_col,
+                    "description": description,
+                }
+                raw_cols = detail.get("columns", [])
+                needs_dttm_flag = any(
+                    c.get("column_name", "").lower() == main_dttm_col.lower() and not c.get("is_dttm")
+                    for c in raw_cols
                 )
+                if needs_dttm_flag and raw_cols:
+                    updated_cols = []
+                    for c in raw_cols:
+                        col_item: Dict[str, Any] = {
+                            "id": c["id"],
+                            "column_name": c["column_name"],
+                            "type": c.get("type") or "STRING",
+                            "is_dttm": bool(c.get("is_dttm"))
+                            or (c.get("column_name", "").lower() == main_dttm_col.lower()),
+                            "groupby": bool(c.get("groupby", True)),
+                            "filterable": bool(c.get("filterable", True)),
+                        }
+                        updated_cols.append(col_item)
+                    update_payload["columns"] = updated_cols
+
+                client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=update_payload)
+                detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
             except Exception:
                 pass
 
-        detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
         cols_by_name = {
             c["column_name"]: c for c in detail.get("columns", []) if "column_name" in c
         }
@@ -518,7 +579,8 @@ def upsert_datasets(
             "columns": cols_by_name,
         }
         print(
-            f"[OK] Passo 2/3 — Dataset 'mart.{view_name}' (ID={ds_id}, {len(cols_by_name)} colunas) pronto."
+            f"[OK] Passo 2/3 — Dataset 'mart.{view_name}' (ID={ds_id}, {len(cols_by_name)} colunas) pronto.",
+            flush=True,
         )
 
     return datasets_info
@@ -775,20 +837,36 @@ def build_sala_de_guerra_dashboard(
         (
             "SERIE_BACKLOG_90D",
             "Evolução Diária do Backlog e SLA Vencido (90 Dias)",
-            "echarts_timeseries_area",
+            "echarts_area",
             ds_evol["id"],
             {
-                "x_axis": resolve_col_name(ds_evol, "DataSnapshot"),
+                "x_axis": "DataSnapshot",
+                "granularity_sqla": "DataSnapshot",
                 "time_grain_sqla": "P1D",
+                "x_axis_sort_asc": True,
                 "metrics": [
                     make_simple_metric(ds_evol, "QtdTickets", "SUM", "Backlog Total"),
                     make_simple_metric(ds_evol, "QtdSlaVencido", "SUM", "SLA Vencido"),
                 ],
                 "groupby": [],
-                "adhoc_filters": [],
+                "adhoc_filters": [
+                    {
+                        "clause": "WHERE",
+                        "comparator": "No filter",
+                        "datasourceWarning": False,
+                        "expressionType": "SIMPLE",
+                        "filterOptionName": "filter_datasnapshot_temporal",
+                        "isExtra": False,
+                        "isNew": False,
+                        "operator": "TEMPORAL_RANGE",
+                        "sqlExpression": None,
+                        "subject": "DataSnapshot",
+                    }
+                ],
                 "row_limit": 10000,
                 "show_legend": True,
                 "rich_tooltip": True,
+                "area": True,
                 "opacity": 0.25,
             },
             "Fotografia histórica diária da fila aberta vs chamados com SLA vencido.",
@@ -799,14 +877,29 @@ def build_sala_de_guerra_dashboard(
             "echarts_timeseries_bar",
             ds_through["id"],
             {
-                "x_axis": resolve_col_name(ds_through, "Data"),
+                "x_axis": "Data",
+                "granularity_sqla": "Data",
                 "time_grain_sqla": "P1D",
+                "x_axis_sort_asc": True,
                 "metrics": [
                     make_simple_metric(ds_through, "Abertos", "SUM", "Abertos"),
                     make_simple_metric(ds_through, "Resolvidos", "SUM", "Resolvidos"),
                 ],
                 "groupby": [],
-                "adhoc_filters": [],
+                "adhoc_filters": [
+                    {
+                        "clause": "WHERE",
+                        "comparator": "No filter",
+                        "datasourceWarning": False,
+                        "expressionType": "SIMPLE",
+                        "filterOptionName": "filter_data_temporal",
+                        "isExtra": False,
+                        "isNew": False,
+                        "operator": "TEMPORAL_RANGE",
+                        "sqlExpression": None,
+                        "subject": "Data",
+                    }
+                ],
                 "row_limit": 5000,
                 "show_legend": True,
                 "rich_tooltip": True,
@@ -914,6 +1007,7 @@ def build_sala_de_guerra_dashboard(
                     ds_clientes,
                     [
                         "Cliente",
+                        "Equipe",
                         "StatusRelacionamento",
                         "TicketsAtualmenteAbertos",
                         "TotalTicketsHistorico",
@@ -929,7 +1023,7 @@ def build_sala_de_guerra_dashboard(
                 "show_cell_bars": True,
                 "adhoc_filters": [],
             },
-            "Saúde da carteira de clientes, % SLA cumprido e alerta de clientes silenciosos.",
+            "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos.",
         ),
     ]
 

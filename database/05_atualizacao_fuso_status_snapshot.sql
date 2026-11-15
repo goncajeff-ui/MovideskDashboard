@@ -907,6 +907,7 @@ SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
+    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
     COUNT(t.TicketId) AS TotalTicketsHistorico,
     COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
     COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
@@ -925,7 +926,12 @@ LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 CROSS JOIN Parametros p
 WHERE ISNULL(c.TipoPessoa, 2) IN (2, 4)
    OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId))
-GROUP BY c.ClienteId, c.Nome, c.RazaoSocial, p.DiasSilenciosoCritico;
+GROUP BY
+    c.ClienteId,
+    c.Nome,
+    c.RazaoSocial,
+    ISNULL(t.Equipe, N'Sem Equipe'),
+    p.DiasSilenciosoCritico;
 GO
 
 CREATE OR ALTER VIEW mart.vw_MapaDemanda

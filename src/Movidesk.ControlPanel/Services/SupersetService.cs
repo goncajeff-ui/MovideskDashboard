@@ -932,30 +932,61 @@ public sealed class SupersetService : IDisposable
                 ["adhoc_filters"] = new JsonArray()
             }, "Fila ativa ordenada por gravidade de risco de quebra de SLA."),
 
-            ("SERIE_BACKLOG_90D", "Evolução Diária do Backlog e SLA Vencido (90 Dias)", "echarts_timeseries_area", dsEvol.Id, new JsonObject
+            ("SERIE_BACKLOG_90D", "Evolução Diária do Backlog e SLA Vencido (90 Dias)", "echarts_area", dsEvol.Id, new JsonObject
             {
-                ["x_axis"] = ResolveColName(dsEvol, "DataSnapshot"),
+                ["x_axis"] = "DataSnapshot",
+                ["granularity_sqla"] = "DataSnapshot",
                 ["time_grain_sqla"] = "P1D",
+                ["x_axis_sort_asc"] = true,
                 ["metrics"] = new JsonArray(
                     MakeSimpleMetric(dsEvol, "QtdTickets", "SUM", "Backlog Total"),
                     MakeSimpleMetric(dsEvol, "QtdSlaVencido", "SUM", "SLA Vencido")),
                 ["groupby"] = new JsonArray(),
-                ["adhoc_filters"] = new JsonArray(),
+                ["adhoc_filters"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["clause"] = "WHERE",
+                        ["comparator"] = "No filter",
+                        ["datasourceWarning"] = false,
+                        ["expressionType"] = "SIMPLE",
+                        ["filterOptionName"] = "filter_datasnapshot_temporal",
+                        ["isExtra"] = false,
+                        ["isNew"] = false,
+                        ["operator"] = "TEMPORAL_RANGE",
+                        ["sqlExpression"] = null,
+                        ["subject"] = "DataSnapshot"
+                    }),
                 ["row_limit"] = 10000,
                 ["show_legend"] = true,
                 ["rich_tooltip"] = true,
+                ["area"] = true,
                 ["opacity"] = 0.25
             }, "Fotografia histórica diária da fila aberta vs chamados com SLA vencido."),
 
             ("SERIE_THROUGHPUT", "Throughput Diário: Abertos vs Resolvidos", "echarts_timeseries_bar", dsThrough.Id, new JsonObject
             {
-                ["x_axis"] = ResolveColName(dsThrough, "Data"),
+                ["x_axis"] = "Data",
+                ["granularity_sqla"] = "Data",
                 ["time_grain_sqla"] = "P1D",
+                ["x_axis_sort_asc"] = true,
                 ["metrics"] = new JsonArray(
                     MakeSimpleMetric(dsThrough, "Abertos", "SUM", "Abertos"),
                     MakeSimpleMetric(dsThrough, "Resolvidos", "SUM", "Resolvidos")),
                 ["groupby"] = new JsonArray(),
-                ["adhoc_filters"] = new JsonArray(),
+                ["adhoc_filters"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["clause"] = "WHERE",
+                        ["comparator"] = "No filter",
+                        ["datasourceWarning"] = false,
+                        ["expressionType"] = "SIMPLE",
+                        ["filterOptionName"] = "filter_data_temporal",
+                        ["isExtra"] = false,
+                        ["isNew"] = false,
+                        ["operator"] = "TEMPORAL_RANGE",
+                        ["sqlExpression"] = null,
+                        ["subject"] = "Data"
+                    }),
                 ["row_limit"] = 5000,
                 ["show_legend"] = true,
                 ["rich_tooltip"] = true
@@ -1007,7 +1038,7 @@ public sealed class SupersetService : IDisposable
             {
                 ["query_mode"] = "raw",
                 ["all_columns"] = FilterExistingCols(dsClientes,
-                    "Cliente", "StatusRelacionamento", "TicketsAtualmenteAbertos",
+                    "Cliente", "Equipe", "StatusRelacionamento", "TicketsAtualmenteAbertos",
                     "TotalTicketsHistorico", "SlaCumpridoPct", "DiasDesdeUltimoTicket", "DataUltimoTicket"),
                 ["order_by_cols"] = new JsonArray("[\"TotalTicketsHistorico\", false]"),
                 ["row_limit"] = 500,
@@ -1015,7 +1046,7 @@ public sealed class SupersetService : IDisposable
                 ["include_search"] = true,
                 ["show_cell_bars"] = true,
                 ["adhoc_filters"] = new JsonArray()
-            }, "Saúde da carteira de clientes, % SLA cumprido e alerta de clientes silenciosos.")
+            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos.")
         };
 
         var createdMeta = new Dictionary<string, ChartMetadata>(StringComparer.OrdinalIgnoreCase);
