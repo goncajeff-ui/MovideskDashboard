@@ -1,0 +1,28 @@
+services:
+  superset:
+    image: apache/superset:latest
+    container_name: advice_movidesk_superset
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: "${SUPERSET_SECRET_KEY:-movidesk_superset_super_secret_key_2026}"
+      SUPERSET_CONFIG_PATH: "/app/pythonpath/superset_config.py"
+      SUPERSET_LOAD_EXAMPLES: "no"
+      FLASK_APP: "superset"
+      TZ: "America/Sao_Paulo"
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8088/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  superset_home:
+    name: advice_movidesk_superset_home

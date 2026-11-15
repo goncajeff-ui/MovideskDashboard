@@ -13,3 +13,8 @@ amostra_real/
 superset/.venv/
 superset/venv/
 *.sqlite
+
+# Pacotes de distribuição e recursos empacotados gerados no build
+publish/
+*.zip
+src/Movidesk.Installer/Resources/ControlPanel.zip

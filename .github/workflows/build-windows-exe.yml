@@ -5,6 +5,8 @@ on:
     branches: [ main ]
     paths:
       - 'src/Movidesk.ControlPanel/**'
+      - 'src/Movidesk.Installer/**'
+      - 'Gerar_Instalador.bat'
       - 'database/**'
       - 'superset/**'
       - 'docs/manuais/**'
@@ -68,21 +70,38 @@ jobs:
             Write-Host "OK: $file"
           }
 
-      - name: Package ZIP
+      - name: Package ControlPanel ZIP and Embed in Installer
         shell: pwsh
         run: |
           Compress-Archive -Path publish/MovideskControlPanel/* -DestinationPath MovideskControlPanel-win-x64.zip -Force
+          Copy-Item -Path MovideskControlPanel-win-x64.zip -Destination src/Movidesk.Installer/Resources/ControlPanel.zip -Force
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD/MovideskControlPanel-win-x64.zip")
           Write-Host "Conteudo do ZIP:"
           $zip.Entries | ForEach-Object { Write-Host " - $($_.FullName) ($($_.Length) bytes)" }
           $zip.Dispose()
 
+      - name: Publish MovideskInstaller.exe (Advice Installer 2.0 Single-File)
+        shell: pwsh
+        run: |
+          dotnet publish src/Movidesk.Installer/Movidesk.Installer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o publish/MovideskInstaller
+          $exeSrc = "publish/MovideskInstaller/MovideskInstaller.exe"
+          if (-not (Test-Path $exeSrc)) {
+            throw "MovideskInstaller.exe nao foi gerado!"
+          }
+          $sizeMb = [Math]::Round((Get-Item $exeSrc).Length / 1MB, 2)
+          Write-Host "OK: MovideskInstaller.exe gerado ($sizeMb MB)"
+          if ($sizeMb -lt 15) {
+            throw "MovideskInstaller.exe parece nao conter ControlPanel.zip embutido ($sizeMb MB)."
+          }
+          Copy-Item -Path $exeSrc -Destination MovideskInstaller-Dashboard-Movidesk-BI.exe -Force
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MovideskControlPanel-win-x64
+          name: MovideskDashboard-Windows-Suite
           path: |
+            MovideskInstaller-Dashboard-Movidesk-BI.exe
             MovideskControlPanel-win-x64.zip
             docs/manuais/*.pdf
 
@@ -91,16 +110,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: control-panel-v1.0.${{ github.run_number }}
-          name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} + Setup Automático Superset
+          name: Instalador Unificado + Painel de Controle Movidesk BI v1.0.${{ github.run_number }}
           body: |
             ### Pacote Oficial Advice Compliance Solutions — Movidesk BI
-            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com **Configuração Inicial Automática do Apache Superset** nativa em C# embarcada (Database `MovideskDM`, 9 Datasets `mart`, **15 gráficos**, **3 filtros globais** e **Dashboard - Movidesk BI**) e migração automática do banco (`05`–`08`).
+            - **`MovideskInstaller-Dashboard-Movidesk-BI.exe`**: **Instalador Visual Único (Advice Installer 2.0)** em .NET 8 WinForms com recursos embutidos (`ControlPanel.zip`, `advice.ico`, `docker-compose.yml`, `superset_config.py`, `setup_superset_auto.py` e scripts SQL). Realiza o deploy unificado completo em servidores Windows com WSL 2 Ubuntu, Docker, Apache Superset, Driver ODBC 18 (`msodbcsql18`) e provisionamento do **Dashboard - Movidesk BI**.
+            - **`MovideskControlPanel-win-x64.zip`**: Pacote standalone do Painel de Controle Movidesk BI (.NET 8 + Blazor) para atualização avulsa.
             - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI (5 páginas).
             - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset (6 páginas).
-            - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (13 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS`, Catálogo Definitivo das 9 Views `mart` e Índices Covering).
-            - **`Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf`**: Manual Executivo de Leitura da Sala de Guerra — Dashboard - Movidesk BI (8 páginas — Guia didático dos 15 componentes nos 4 blocos operacionais e CS).
+            - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (13 páginas).
+            - **`Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf`**: Manual Executivo de Leitura — Dashboard - Movidesk BI (8 páginas).
             - **`Historico_Passo_a_Passo_Projeto.md`**: Memória cronológica passo a passo de todas as entregas e correções do projeto.
           files: |
+            MovideskInstaller-Dashboard-Movidesk-BI.exe
             MovideskControlPanel-win-x64.zip
             docs/manuais/Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf
             docs/manuais/Manual_02_Configuracao_Apache_Superset_Corporativo.pdf

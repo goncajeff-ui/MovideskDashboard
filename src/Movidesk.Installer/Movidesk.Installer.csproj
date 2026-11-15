@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>MovideskInstaller</AssemblyName>
+    <RootNamespace>Movidesk.Installer</RootNamespace>
+    <Version>2.0.0</Version>
+    <Company>Advice Compliance Solutions</Company>
+    <Product>Instalador - Dashboard Movidesk BI (Advice Installer 2.0)</Product>
+    <ApplicationIcon>Resources\advice.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Identidade visual e composições embutidas no executável único -->
+    <EmbeddedResource Include="Resources\advice.ico" LogicalName="Movidesk.Installer.Resources.advice.ico" />
+    <EmbeddedResource Include="Resources\image_77b41c.jpg" LogicalName="Movidesk.Installer.Resources.image_77b41c.jpg" />
+    <EmbeddedResource Include="Resources\docker-compose.yml" LogicalName="Movidesk.Installer.Resources.docker-compose.yml" />
+    <EmbeddedResource Include="..\..\superset\superset_config.py" LogicalName="Movidesk.Installer.Resources.superset_config.py" />
+    <EmbeddedResource Include="..\..\superset\setup_superset_auto.py" LogicalName="Movidesk.Installer.Resources.setup_superset_auto.py" />
+
+    <!-- Pacote consolidado do Painel de Controle gerado no build/release -->
+    <EmbeddedResource Include="Resources\ControlPanel.zip" Condition="Exists('Resources\ControlPanel.zip')" LogicalName="Movidesk.Installer.Resources.ControlPanel.zip" />
+
+    <!-- Scripts SQL Server do Data Mart MovideskDM para backup local de manutenção -->
+    <EmbeddedResource Include="..\..\database\*.sql" LogicalName="Movidesk.Installer.Sql.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
