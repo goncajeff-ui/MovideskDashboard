@@ -56,7 +56,7 @@ MART_VIEWS: List[Tuple[str, Optional[str], str]] = [
     ("vw_StatusAging", None, "Gargalos Operacionais e Tempo Médio Retido por Status"),
     ("vw_BacklogEvolucao", "DataSnapshot", "Curva Histórica Diária do Backlog Total vs SLA Vencido (90 Dias)"),
     ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
-    ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes, % SLA e Risco de Churn (> 60d)"),
+    ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes por Produto/Serviço e Dono Atual (Último Ticket), % SLA e Risco de Churn (> 60d)"),
     ("vw_MapaDemanda", None, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
     ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período"),
 ]
@@ -513,7 +513,7 @@ END;
             "vw_backlogaging": {"equipe", "servico"},
             "vw_statusaging": {"equipe"},
             "vw_throughputdiario": {"equipe"},
-            "vw_clienteraiox": {"equipe"},
+            "vw_clienteraiox": {"equipe", "servico"},
             "vw_mapademanda": {"equipe", "servico"},
             "vw_backlogevolucao": {"equipe"},
             "vw_ticketsporclienteperiodo": {"equipe", "cliente", "dataabertura"},
@@ -522,9 +522,19 @@ END;
         views_to_update: List[str] = []
         for v, req in required_view_cols.items():
             v_def_lower = view_defs.get(v, "").lower()
-            has_old_ehfinal = "isnull(st.ehfinal, case" in v_def_lower
+            has_old_ehfinal = (
+                v in ("vw_visaogeralkpis", "vw_slaradar", "vw_backlogaging", "vw_statusaging", "vw_mapademanda")
+                and "isnull(st.ehfinal, case" in v_def_lower
+            )
             missing_pausa = v in ("vw_visaogeralkpis", "vw_slaradar") and "st.pausasla" not in v_def_lower
-            if v not in view_cols or not req.issubset(view_cols[v]) or has_old_ehfinal or missing_pausa:
+            missing_dono_atual = v == "vw_clienteraiox" and "donoatual" not in v_def_lower
+            if (
+                v not in view_cols
+                or not req.issubset(view_cols[v])
+                or has_old_ehfinal
+                or missing_pausa
+                or missing_dono_atual
+            ):
                 views_to_update.append(v)
 
         if not views_to_update and not proc_updated and status_fixed == 0:
@@ -784,41 +794,77 @@ LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Equipe = a.Equipe
 LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Equipe = r.Equipe;
 """,
             "vw_clienteraiox": """
+-- Ajustado por Jefferson Gonçalves em 15/11/2026 para redefinir a posse do cliente com base no último ticket por produto
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
 AS
 WITH Parametros AS (
+    SELECT ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+),
+TicketsBase AS (
     SELECT
-        ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+        t.TicketId,
+        t.EmpresaId,
+        ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+        t.DataCriacao,
+        t.DataResolucao,
+        t.SlaDataSolucao,
+        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal
+    FROM core.Fato_Ticket t
+    LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+),
+-- Identifica o último chamado para cada combinação de Cliente + Serviço
+UltimoTicket AS (
+    SELECT
+        EmpresaId,
+        Servico,
+        Equipe AS EquipeAtual,
+        DataCriacao AS DataUltimoTicket,
+        ROW_NUMBER() OVER(PARTITION BY EmpresaId, Servico ORDER BY DataCriacao DESC) AS rn
+    FROM TicketsBase
+),
+-- Isola apenas a linha mais recente (rn = 1) que ditará quem é o Dono Atual
+DonoAtual AS (
+    SELECT EmpresaId, Servico, EquipeAtual, DataUltimoTicket
+    FROM UltimoTicket
+    WHERE rn = 1
+),
+-- Agrega os históricos de saúde separadamente mantendo a granularidade
+Agregacao AS (
+    SELECT
+        EmpresaId,
+        Servico,
+        COUNT(TicketId) AS TotalTicketsHistorico,
+        COUNT(CASE WHEN EhFinal = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
+        COUNT(CASE WHEN DataResolucao IS NOT NULL AND DataResolucao <= SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
+        COUNT(CASE WHEN DataResolucao IS NOT NULL AND SlaDataSolucao IS NOT NULL THEN 1 END) AS TotalSlaValido
+    FROM TicketsBase
+    GROUP BY EmpresaId, Servico
 )
-SELECT 
+SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
-    COUNT(t.TicketId) AS TotalTicketsHistorico,
-    COUNT(CASE WHEN t.TicketId IS NOT NULL AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
-    COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
-    CAST(ROUND(100.0 * COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) 
-        / NULLIF(COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
-    MAX(t.DataCriacao) AS DataUltimoTicket,
-    DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) AS DiasDesdeUltimoTicket,
-    CASE 
-        WHEN MAX(t.DataCriacao) IS NULL OR DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
-        WHEN DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
+    ISNULL(d.Servico, N'Sem Serviço') AS Servico,
+    ISNULL(d.EquipeAtual, N'Sem Equipe') AS Equipe,
+    ISNULL(a.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
+    ISNULL(a.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
+    ISNULL(a.TicketsDentroSla, 0) AS TicketsDentroSla,
+    CAST(ROUND(100.0 * a.TicketsDentroSla / NULLIF(a.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
+    d.DataUltimoTicket,
+    DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
+    CASE
+        WHEN d.DataUltimoTicket IS NULL OR DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
+        WHEN DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
         ELSE 'Ativo (< 30d)'
     END AS StatusRelacionamento
 FROM core.Dim_Cliente c
-LEFT JOIN core.Fato_Ticket t ON c.ClienteId = t.EmpresaId
-LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+LEFT JOIN DonoAtual d ON c.ClienteId = d.EmpresaId
+LEFT JOIN Agregacao a ON c.ClienteId = a.EmpresaId AND d.Servico = a.Servico
 CROSS JOIN Parametros p
-WHERE ISNULL(c.TipoPessoa, 2) IN (2, 4)
-   OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId))
-GROUP BY
-    c.ClienteId,
-    c.Nome,
-    c.RazaoSocial,
-    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
-    p.DiasSilenciosoCritico;
+WHERE
+    (ISNULL(c.TipoPessoa, 2) IN (2, 4) OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId)))
+    AND ISNULL(c.Ativo, 1) = 1;
 """,
             "vw_mapademanda": """
 CREATE OR ALTER VIEW mart.vw_MapaDemanda
@@ -1051,15 +1097,15 @@ def upsert_datasets(
                 for c in raw_cols:
                     c_name = c.get("column_name", "")
                     is_main_dttm = bool(main_dttm_col and c_name.lower() == main_dttm_col.lower())
-                    is_equipe = c_name.lower() == "equipe"
+                    is_dim_chave = c_name.lower() in ("equipe", "servico")
 
                     curr_dttm = bool(c.get("is_dttm"))
                     curr_groupby = bool(c.get("groupby", True))
                     curr_filterable = bool(c.get("filterable", True))
 
                     target_dttm = curr_dttm or is_main_dttm
-                    target_groupby = True if is_equipe else curr_groupby
-                    target_filterable = True if is_equipe else curr_filterable
+                    target_groupby = True if is_dim_chave else curr_groupby
+                    target_filterable = True if is_dim_chave else curr_filterable
 
                     if (
                         target_dttm != curr_dttm
@@ -1582,16 +1628,17 @@ def build_movidesk_dashboard(
                     ds_clientes,
                     [
                         "Cliente",
+                        "Servico",
                         "Equipe",
                         "StatusRelacionamento",
                         "DataUltimoTicket",
                     ],
                 ),
                 "metrics": [
+                    make_simple_metric(ds_clientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"),
                     make_simple_metric(ds_clientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
                     make_simple_metric(ds_clientes, "TicketsAtualmenteAbertos", "SUM", "Em Aberto"),
                     make_simple_metric(ds_clientes, "SlaCumpridoPct", "AVG", "SLA Cumprido (%)"),
-                    make_simple_metric(ds_clientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"),
                 ],
                 "percent_metrics": [
                     make_simple_metric(
@@ -1604,7 +1651,7 @@ def build_movidesk_dashboard(
                 ],
                 "all_columns": [],
                 "timeseries_limit_metric": make_simple_metric(
-                    ds_clientes, "TotalTicketsHistorico", "SUM", "Total Tickets"
+                    ds_clientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"
                 ),
                 "order_desc": True,
                 "percent_metric_calculation": "row_limit",
@@ -1623,7 +1670,7 @@ def build_movidesk_dashboard(
                         "subject": "DataUltimoTicket",
                     }
                 ],
-                "row_limit": 500,
+                "row_limit": 2000,
                 "page_length": 15,
                 "include_search": True,
                 "show_cell_bars": True,
@@ -1631,14 +1678,14 @@ def build_movidesk_dashboard(
                 "align_pn": True,
                 "show_totals": True,
                 "column_config": {
+                    "Dias Sem Ticket": {"d3NumberFormat": ",d"},
                     "Total Tickets": {"d3NumberFormat": ",d"},
                     "Em Aberto": {"d3NumberFormat": ",d"},
                     "SLA Cumprido (%)": {"d3NumberFormat": ".1f"},
-                    "Dias Sem Ticket": {"d3NumberFormat": ",d"},
                     "%Total": {"d3NumberFormat": ".1%"},
                 },
             },
-            "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %).",
+            "Saúde da carteira de clientes por Produto/Serviço e Equipe Atual (Dono Atual), ordenada do cliente há mais tempo sem abrir chamado ao mais recente.",
         ),
         # Row 6: Pizza/Donut Tickets Abertos por Cliente (Organização) + Grid Detalhado no Período
         (

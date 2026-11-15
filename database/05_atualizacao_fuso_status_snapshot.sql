@@ -939,41 +939,77 @@ LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Equipe = a.Equipe
 LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Equipe = r.Equipe;
 GO
 
+-- Ajustado por Jefferson Gonçalves em 15/11/2026 para redefinir a posse do cliente com base no último ticket por produto
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
 AS
 WITH Parametros AS (
+    SELECT ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+),
+TicketsBase AS (
     SELECT
-        ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+        t.TicketId,
+        t.EmpresaId,
+        ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+        t.DataCriacao,
+        t.DataResolucao,
+        t.SlaDataSolucao,
+        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal
+    FROM core.Fato_Ticket t
+    LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+),
+-- Identifica o último chamado para cada combinação de Cliente + Serviço
+UltimoTicket AS (
+    SELECT
+        EmpresaId,
+        Servico,
+        Equipe AS EquipeAtual,
+        DataCriacao AS DataUltimoTicket,
+        ROW_NUMBER() OVER(PARTITION BY EmpresaId, Servico ORDER BY DataCriacao DESC) AS rn
+    FROM TicketsBase
+),
+-- Isola apenas a linha mais recente (rn = 1) que ditará quem é o Dono Atual
+DonoAtual AS (
+    SELECT EmpresaId, Servico, EquipeAtual, DataUltimoTicket
+    FROM UltimoTicket
+    WHERE rn = 1
+),
+-- Agrega os históricos de saúde separadamente mantendo a granularidade
+Agregacao AS (
+    SELECT
+        EmpresaId,
+        Servico,
+        COUNT(TicketId) AS TotalTicketsHistorico,
+        COUNT(CASE WHEN EhFinal = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
+        COUNT(CASE WHEN DataResolucao IS NOT NULL AND DataResolucao <= SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
+        COUNT(CASE WHEN DataResolucao IS NOT NULL AND SlaDataSolucao IS NOT NULL THEN 1 END) AS TotalSlaValido
+    FROM TicketsBase
+    GROUP BY EmpresaId, Servico
 )
-SELECT 
+SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
-    COUNT(t.TicketId) AS TotalTicketsHistorico,
-    COUNT(CASE WHEN t.TicketId IS NOT NULL AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
-    COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
-    CAST(ROUND(100.0 * COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) 
-        / NULLIF(COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
-    MAX(t.DataCriacao) AS DataUltimoTicket,
-    DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) AS DiasDesdeUltimoTicket,
-    CASE 
-        WHEN MAX(t.DataCriacao) IS NULL OR DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
-        WHEN DATEDIFF(DAY, MAX(t.DataCriacao), SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
+    ISNULL(d.Servico, N'Sem Serviço') AS Servico,
+    ISNULL(d.EquipeAtual, N'Sem Equipe') AS Equipe,
+    ISNULL(a.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
+    ISNULL(a.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
+    ISNULL(a.TicketsDentroSla, 0) AS TicketsDentroSla,
+    CAST(ROUND(100.0 * a.TicketsDentroSla / NULLIF(a.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
+    d.DataUltimoTicket,
+    DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
+    CASE
+        WHEN d.DataUltimoTicket IS NULL OR DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
+        WHEN DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
         ELSE 'Ativo (< 30d)'
     END AS StatusRelacionamento
 FROM core.Dim_Cliente c
-LEFT JOIN core.Fato_Ticket t ON c.ClienteId = t.EmpresaId
-LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+LEFT JOIN DonoAtual d ON c.ClienteId = d.EmpresaId
+LEFT JOIN Agregacao a ON c.ClienteId = a.EmpresaId AND d.Servico = a.Servico
 CROSS JOIN Parametros p
-WHERE ISNULL(c.TipoPessoa, 2) IN (2, 4)
-   OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId))
-GROUP BY
-    c.ClienteId,
-    c.Nome,
-    c.RazaoSocial,
-    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
-    p.DiasSilenciosoCritico;
+WHERE
+    (ISNULL(c.TipoPessoa, 2) IN (2, 4) OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId)))
+    AND ISNULL(c.Ativo, 1) = 1;
 GO
 
 CREATE OR ALTER VIEW mart.vw_MapaDemanda

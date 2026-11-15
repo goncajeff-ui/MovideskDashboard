@@ -248,7 +248,7 @@ public sealed class MovideskIngestionService : IDisposable
                 ["vw_BacklogAging"] = ["Equipe", "Servico"],
                 ["vw_StatusAging"] = ["Equipe"],
                 ["vw_ThroughputDiario"] = ["Equipe"],
-                ["vw_ClienteRaioX"] = ["Equipe"],
+                ["vw_ClienteRaioX"] = ["Equipe", "Servico"],
                 ["vw_MapaDemanda"] = ["Equipe", "Servico"],
                 ["vw_BacklogEvolucao"] = ["Equipe"],
                 ["vw_TicketsPorClientePeriodo"] = ["Equipe", "Cliente", "DataAbertura"]
@@ -260,7 +260,9 @@ public sealed class MovideskIngestionService : IDisposable
                 !defKpis.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
                 !viewDefs.TryGetValue("vw_SlaRadar", out var defRadar) ||
                 defRadar.Contains("ISNULL(st.EhFinal, CASE", StringComparison.OrdinalIgnoreCase) ||
-                !defRadar.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase);
+                !defRadar.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
+                !viewDefs.TryGetValue("vw_ClienteRaioX", out var defClienteRaioX) ||
+                !defClienteRaioX.Contains("DonoAtual", StringComparison.OrdinalIgnoreCase);
 
             if (!precisaAtualizarViews)
             {

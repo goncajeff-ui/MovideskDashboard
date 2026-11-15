@@ -46,7 +46,7 @@ public sealed class SupersetService : IDisposable
         ("vw_StatusAging", null, "Gargalos Operacionais e Tempo Médio Retido por Status"),
         ("vw_BacklogEvolucao", "DataSnapshot", "Curva Histórica Diária do Backlog Total vs SLA Vencido (90 Dias)"),
         ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
-        ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes, % SLA e Risco de Churn (> 60d)"),
+        ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes por Produto/Serviço e Dono Atual (Último Ticket), % SLA e Risco de Churn (> 60d)"),
         ("vw_MapaDemanda", null, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
         ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período")
     ];
@@ -728,15 +728,16 @@ public sealed class SupersetService : IDisposable
 
                         bool isMainDttm = !string.IsNullOrWhiteSpace(mainDttmCol) &&
                             string.Equals(cName, mainDttmCol, StringComparison.OrdinalIgnoreCase);
-                        bool isEquipe = string.Equals(cName, "Equipe", StringComparison.OrdinalIgnoreCase);
+                        bool isDimChave = string.Equals(cName, "Equipe", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(cName, "Servico", StringComparison.OrdinalIgnoreCase);
 
                         bool currIsDttm = rawCol["is_dttm"]?.GetValue<bool>() ?? false;
                         bool currGroupby = rawCol["groupby"]?.GetValue<bool>() ?? true;
                         bool currFilterable = rawCol["filterable"]?.GetValue<bool>() ?? true;
 
                         bool targetIsDttm = currIsDttm || isMainDttm;
-                        bool targetGroupby = isEquipe ? true : currGroupby;
-                        bool targetFilterable = isEquipe ? true : currFilterable;
+                        bool targetGroupby = isDimChave ? true : currGroupby;
+                        bool targetFilterable = isDimChave ? true : currFilterable;
 
                         if (targetIsDttm != currIsDttm ||
                             targetGroupby != currGroupby ||
@@ -1252,16 +1253,16 @@ public sealed class SupersetService : IDisposable
             {
                 ["query_mode"] = "aggregate",
                 ["groupby"] = FilterExistingCols(dsClientes,
-                    "Cliente", "Equipe", "StatusRelacionamento", "DataUltimoTicket"),
+                    "Cliente", "Servico", "Equipe", "StatusRelacionamento", "DataUltimoTicket"),
                 ["metrics"] = new JsonArray(
+                    MakeSimpleMetric(dsClientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"),
                     MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
                     MakeSimpleMetric(dsClientes, "TicketsAtualmenteAbertos", "SUM", "Em Aberto"),
-                    MakeSimpleMetric(dsClientes, "SlaCumpridoPct", "AVG", "SLA Cumprido (%)"),
-                    MakeSimpleMetric(dsClientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket")),
+                    MakeSimpleMetric(dsClientes, "SlaCumpridoPct", "AVG", "SLA Cumprido (%)")),
                 ["percent_metrics"] = new JsonArray(
                     MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total", "metric_pct_totalticketshistorico_sum")),
                 ["all_columns"] = new JsonArray(),
-                ["timeseries_limit_metric"] = MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
+                ["timeseries_limit_metric"] = MakeSimpleMetric(dsClientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"),
                 ["order_desc"] = true,
                 ["percent_metric_calculation"] = "row_limit",
                 ["table_timestamp_format"] = "%d/%m/%Y",
@@ -1279,7 +1280,7 @@ public sealed class SupersetService : IDisposable
                         ["sqlExpression"] = null,
                         ["subject"] = "DataUltimoTicket"
                     }),
-                ["row_limit"] = 500,
+                ["row_limit"] = 2000,
                 ["page_length"] = 15,
                 ["include_search"] = true,
                 ["show_cell_bars"] = true,
@@ -1288,13 +1289,13 @@ public sealed class SupersetService : IDisposable
                 ["show_totals"] = true,
                 ["column_config"] = new JsonObject
                 {
+                    ["Dias Sem Ticket"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["Total Tickets"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["Em Aberto"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["SLA Cumprido (%)"] = new JsonObject { ["d3NumberFormat"] = ".1f" },
-                    ["Dias Sem Ticket"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["%Total"] = new JsonObject { ["d3NumberFormat"] = ".1%" }
                 }
-            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %)."),
+            }, "Saúde da carteira de clientes por Produto/Serviço e Equipe Atual (Dono Atual), ordenada do cliente há mais tempo sem abrir chamado ao mais recente."),
 
             ("PIE_TICKETS_CLIENTE", "Tickets Abertos por Cliente (Organização)", "pie", dsClientesPeriodo.Id, new JsonObject
             {
