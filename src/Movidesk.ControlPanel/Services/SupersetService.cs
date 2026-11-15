@@ -208,48 +208,14 @@ public sealed class SupersetService : IDisposable
         }
         NotifyStateChanged();
 
-        string comandoSuperset = $$"""
-            set -e
-            echo "[INF] Verificando serviço Docker no WSL..."
-            if ! docker info >/dev/null 2>&1; then
-                echo "[INF] Inicializando daemon do Docker..."
-                service docker status >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
-                sleep 2
-            fi
-
-            COMPOSE_DIR=""
-            if [ -d "{{_composePath}}" ] && [ -f "{{_composePath}}/docker-compose.yml" ]; then
-                COMPOSE_DIR="{{_composePath}}"
-            elif [ -d "/opt/advice-movidesk-superset" ] && [ -f "/opt/advice-movidesk-superset/docker-compose.yml" ]; then
-                COMPOSE_DIR="/opt/advice-movidesk-superset"
-            elif [ -d "/opt/movidesk-superset" ] && [ -f "/opt/movidesk-superset/docker-compose.yml" ]; then
-                COMPOSE_DIR="/opt/movidesk-superset"
-            fi
-
-            if [ -n "$COMPOSE_DIR" ]; then
-                echo "[INF] Iniciando Apache Superset via Docker Compose ($COMPOSE_DIR)..."
-                cd "$COMPOSE_DIR"
-                if docker compose version >/dev/null 2>&1; then
-                    docker compose up -d
-                elif command -v docker-compose >/dev/null 2>&1; then
-                    docker-compose up -d
-                else
-                    docker start {{_containerName}} 2>/dev/null || docker start advice_movidesk_superset 2>/dev/null || true
-                fi
-            elif docker ps -a --format '{{"{{"}}.Names{{"}}"}}' | grep -Eq '^({{_containerName}}|advice_movidesk_superset|superset-movidesk)$'; then
-                echo "[INF] Inicializando contêiner Docker existente..."
-                docker start {{_containerName}} 2>/dev/null || docker start advice_movidesk_superset 2>/dev/null || docker start superset-movidesk 2>/dev/null
-            elif [ -f "{{_venvActivatePath}}" ]; then
-                echo "[INF] Utilizando ambiente virtual Python legado ({{_venvActivatePath}})..."
-                source "{{_venvActivatePath}}" && export SUPERSET_SECRET_KEY='{{_secretKey}}' && exec superset run -h 0.0.0.0 -p {{_port}} --with-threads
-            else
-                echo "[ERRO] Nenhum contêiner Docker ('{{_containerName}}') ou diretório Docker Compose foi encontrado no WSL." >&2
-                echo "[DICA] Execute o instalador 'MovideskInstaller-Dashboard-Movidesk-BI.exe' para provisionar a imagem oficial apache/superset:6.1.0." >&2
-                exit 1
-            fi
-
-            echo "[OK] Inicialização do Docker concluída. Aguardando servidor web responder em http://localhost:{{_port}}/health..."
-            """;
+        string comandoSuperset =
+            "service docker status >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true; " +
+            $"docker start {_containerName} 2>/dev/null || " +
+            "docker start advice_movidesk_superset 2>/dev/null || " +
+            "docker start superset-movidesk 2>/dev/null || " +
+            $"(cd {_composePath} 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || " +
+            "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || " +
+            "(cd /opt/movidesk-superset 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || true";
 
         AppendLog($"Executando WSL ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)} - Docker Engine)...");
 
@@ -368,18 +334,13 @@ public sealed class SupersetService : IDisposable
                 StatusMessage = "Superset parado pelo operador.";
             }
 
-            string comandoStop = $$"""
-                if [ -d "{{_composePath}}" ]; then
-                    cd "{{_composePath}}" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
-                elif [ -d "/opt/advice-movidesk-superset" ]; then
-                    cd "/opt/advice-movidesk-superset" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
-                elif [ -d "/opt/movidesk-superset" ]; then
-                    cd "/opt/movidesk-superset" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
-                fi
-                docker stop {{_containerName}} 2>/dev/null || docker stop advice_movidesk_superset 2>/dev/null || docker stop superset-movidesk 2>/dev/null || true
-                pkill -f '[s]uperset run' 2>/dev/null || true
-                echo "[OK] Contêiner Apache Superset finalizado."
-                """;
+            string comandoStop =
+                $"docker stop {_containerName} 2>/dev/null || " +
+                "docker stop advice_movidesk_superset 2>/dev/null || " +
+                "docker stop superset-movidesk 2>/dev/null || " +
+                $"(cd {_composePath} 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
+                "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
+                "pkill -f '[s]uperset run' 2>/dev/null || true";
 
             if (OperatingSystem.IsWindows())
             {

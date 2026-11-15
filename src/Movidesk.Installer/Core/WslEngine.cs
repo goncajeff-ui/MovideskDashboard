@@ -669,10 +669,28 @@ public sealed class WslEngine
 
         foreach ((string nomeRegra, string porta) in regras)
         {
-            ResultadoComando res = await ExecutarProcessoAsync(
+            // Remove regra anterior para garantir que profile=any seja sempre aplicado
+            await ExecutarProcessoAsync(
                 "netsh",
                 [
-                    "advfirewall", "firewall", "show", "rule", $"name={nomeRegra}"
+                    "advfirewall", "firewall", "delete", "rule", $"name={nomeRegra}"
+                ],
+                Encoding.UTF8,
+                log,
+                registrarLinhasNoLog: false,
+                timeout: TimeSpan.FromSeconds(10),
+                ct: ct);
+
+            ResultadoComando addRes = await ExecutarProcessoAsync(
+                "netsh",
+                [
+                    "advfirewall", "firewall", "add", "rule",
+                    $"name={nomeRegra}",
+                    "dir=in",
+                    "action=allow",
+                    "protocol=TCP",
+                    $"localport={porta}",
+                    "profile=any"
                 ],
                 Encoding.UTF8,
                 log,
@@ -680,32 +698,13 @@ public sealed class WslEngine
                 timeout: TimeSpan.FromSeconds(15),
                 ct: ct);
 
-            if (!res.Sucesso)
+            if (addRes.Sucesso)
             {
-                ResultadoComando addRes = await ExecutarProcessoAsync(
-                    "netsh",
-                    [
-                        "advfirewall", "firewall", "add", "rule",
-                        $"name={nomeRegra}",
-                        "dir=in",
-                        "action=allow",
-                        "protocol=TCP",
-                        $"localport={porta}"
-                    ],
-                    Encoding.UTF8,
-                    log,
-                    registrarLinhasNoLog: false,
-                    timeout: TimeSpan.FromSeconds(15),
-                    ct: ct);
-
-                if (addRes.Sucesso)
-                {
-                    log.Sucesso($"Regra de Firewall liberando TCP {porta} aplicada.");
-                }
-                else
-                {
-                    log.Aviso($"Não foi possível configurar regra de firewall TCP {porta} (verifique se o serviço está ativo).");
-                }
+                log.Sucesso($"Regra de Firewall liberando TCP {porta} (todos os perfis de rede/WSL) aplicada.");
+            }
+            else
+            {
+                log.Aviso($"Não foi possível configurar regra de firewall TCP {porta}: {addRes.StdErr}");
             }
         }
     }

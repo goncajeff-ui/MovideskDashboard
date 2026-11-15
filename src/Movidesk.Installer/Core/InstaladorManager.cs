@@ -675,24 +675,32 @@ public sealed class InstaladorManager
                 EXPLICIT_HOST="{{EscaparArgBashSimples(sqlHostExplicit)}}"
                 SQL_PORT="{{sqlPort}}"
 
-                if [ -n "$EXPLICIT_HOST" ]; then
-                    TARGET_HOST="$EXPLICIT_HOST"
-                else
-                    TARGET_HOST=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-                    if [ -z "$TARGET_HOST" ]; then
-                        TARGET_HOST=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+                CANDIDATES=()
+                [ -n "$EXPLICIT_HOST" ] && CANDIDATES+=("$EXPLICIT_HOST")
+                ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+                [ -n "$ROUTE_IP" ] && CANDIDATES+=("$ROUTE_IP")
+                NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+                [ -n "$NS_IP" ] && CANDIDATES+=("$NS_IP")
+                CANDIDATES+=("127.0.0.1" "host.docker.internal" "172.29.112.1" "172.20.48.1")
+
+                TARGET_HOST=""
+                for h in "${CANDIDATES[@]}"; do
+                    [ -z "$h" ] && continue
+                    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/$h/$SQL_PORT" 2>/dev/null; then
+                        TARGET_HOST="$h"
+                        echo "[OK] Conexão TCP na porta ${SQL_PORT} com sucesso no endereço: $TARGET_HOST"
+                        break
                     fi
-                    if [ -z "$TARGET_HOST" ]; then
-                        TARGET_HOST="172.29.112.1"
-                    fi
+                done
+
+                if [ -z "$TARGET_HOST" ]; then
+                    DEFAULT_TEST="${ROUTE_IP:-${NS_IP:-172.20.48.1}}"
+                    echo "[AVISO] Porta TCP ${SQL_PORT} do SQL Server não respondeu nos endereços testados (${CANDIDATES[*]})."
+                    echo "[AVISO] Endereço provável do Windows: ${DEFAULT_TEST}. Verifique se o serviço do SQL Server foi reiniciado após habilitar TCP/IP e se o Firewall permite conexões."
+                    exit 42
                 fi
 
                 echo "[INF] Endereço SQL Server resolvido para o WSL2/Docker: ${TARGET_HOST}:${SQL_PORT}"
-
-                if ! timeout 4 bash -c "cat < /dev/null > /dev/tcp/$TARGET_HOST/$SQL_PORT" 2>/dev/null; then
-                    echo "[AVISO] Porta TCP ${SQL_PORT} do SQL Server em $TARGET_HOST não respondeu ao WSL."
-                    exit 42
-                fi
 
                 DB_URI="mssql+pyodbc://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 
