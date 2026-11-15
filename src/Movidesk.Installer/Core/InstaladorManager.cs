@@ -687,6 +687,27 @@ public sealed class InstaladorManager
             string sqlDbRaw = EscaparArgBashSimples(config.SqlServerBanco);
             string containerName = EscaparArgBashSimples(config.NomeConteinerSuperset);
 
+            string probeCode =
+                "import sys, pymssql\n" +
+                "user, password, database, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])\n" +
+                "candidates = sys.argv[5:]\n" +
+                "found = None\n" +
+                "for h in candidates:\n" +
+                "    if not h: continue\n" +
+                "    try:\n" +
+                "        conn = pymssql.connect(server=h, port=port, user=user, password=password, database=database, login_timeout=4)\n" +
+                "        cur = conn.cursor()\n" +
+                "        cur.execute('SELECT 1')\n" +
+                "        cur.fetchone()\n" +
+                "        conn.close()\n" +
+                "        found = h\n" +
+                "        print(f'[OK_SQL_HOST]{h}')\n" +
+                "        break\n" +
+                "    except Exception as e:\n" +
+                "        print(f'[DEBUG_HOST] Conexao com {h}:{port} falhou: {e}', file=sys.stderr)\n" +
+                "if not found:\n" +
+                "    sys.exit(1)\n";
+
             // Descobre IP do host Windows alcançável pelo WSL2/Docker executando teste pymssql de dentro do contêiner
             string scriptDeploy = $$"""
                 set -e
@@ -706,36 +727,7 @@ public sealed class InstaladorManager
 
                 echo "[INF] Testando conectividade direta com SQL Server a partir do contêiner '{{containerName}}'..."
 
-                PROBE_CODE='
-import sys, pymssql
-
-user = sys.argv[1]
-password = sys.argv[2]
-database = sys.argv[3]
-port = int(sys.argv[4])
-candidates = sys.argv[5:]
-
-found = None
-for h in candidates:
-    if not h:
-        continue
-    try:
-        conn = pymssql.connect(server=h, port=port, user=user, password=password, database=database, login_timeout=4)
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.fetchone()
-        conn.close()
-        found = h
-        print(f"[OK_SQL_HOST]{h}")
-        break
-    except Exception as e:
-        print(f"[DEBUG_HOST] Conexao com {h}:{port} falhou: {e}", file=sys.stderr)
-
-if not found:
-    sys.exit(1)
-'
-
-                PROBE_OUT=$(docker exec '{{containerName}}' /app/.venv/bin/python -c "$PROBE_CODE" \
+                PROBE_OUT=$(docker exec '{{containerName}}' /app/.venv/bin/python -c '{{EscaparArgBashSimples(probeCode)}}' \
                     '{{sqlUserRaw}}' \
                     '{{sqlPassRaw}}' \
                     '{{sqlDbRaw}}' \
