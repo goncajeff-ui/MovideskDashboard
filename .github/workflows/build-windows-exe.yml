@@ -47,9 +47,17 @@ jobs:
             Copy-Item -Path "docs/manuais/*.pdf" -Destination $manuaisDest -Force
           }
 
+          if (Test-Path "superset/setup_superset_auto.py") {
+            $pyRaw = [System.IO.File]::ReadAllText("superset/setup_superset_auto.py", [System.Text.Encoding]::UTF8)
+            $pyLf = $pyRaw.Replace("`r`n", "`n").Replace("`r", "`n")
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText((Join-Path $pubDir "setup_superset_auto.py"), $pyLf, $utf8NoBom)
+          }
+
           $required = @(
             (Join-Path $pubDir "MovideskControlPanel.exe"),
             (Join-Path $pubDir "appsettings.json"),
+            (Join-Path $pubDir "setup_superset_auto.py"),
             (Join-Path $wwwrootDest "index.html"),
             (Join-Path $wwwrootDest "css/app.css")
           )

@@ -140,6 +140,7 @@ class SupersetApiClient:
                     env.setdefault(
                         "SUPERSET_SECRET_KEY", "movidesk_superset_super_secret_key_2026"
                     )
+                    env.setdefault("FLASK_APP", "superset")
                     res = subprocess.run(
                         [
                             superset_bin,
@@ -185,10 +186,11 @@ class SupersetApiClient:
         if not self.access_token:
             raise RuntimeError(f"Falha ao obter access_token no login: {login_resp}")
 
-        csrf_resp = self.request("GET", "/api/v1/security/csrf_token/")
-        self.csrf_token = csrf_resp.get("result")
-        if not self.csrf_token:
-            raise RuntimeError(f"Falha ao obter csrf_token: {csrf_resp}")
+        try:
+            csrf_resp = self.request("GET", "/api/v1/security/csrf_token/")
+            self.csrf_token = csrf_resp.get("result")
+        except Exception as csrf_exc:
+            print(f"[INFO] Endpoint CSRF opcional: {csrf_exc}", flush=True)
 
 
 def ensure_superset_online(base_url: str) -> None:
@@ -198,6 +200,7 @@ def ensure_superset_online(base_url: str) -> None:
         try:
             with urllib.request.urlopen(health_url, timeout=3) as resp:
                 if resp.status == 200:
+                    print(f"[OK] Servidor Apache Superset online em {base_url}.", flush=True)
                     return
         except Exception:
             pass
@@ -205,9 +208,10 @@ def ensure_superset_online(base_url: str) -> None:
     # Se estivermos rodando dentro do Linux/WSL e o Superset estiver parado, tenta subi-lo
     superset_bin = os.path.expanduser("~/superset-env/bin/superset")
     if os.path.isfile(superset_bin):
-        print("[INFO] Superset offline na porta 8088. Iniciando servidor em background...")
+        print("[INFO] Superset offline na porta 8088. Iniciando servidor em background...", flush=True)
         env = os.environ.copy()
         env.setdefault("SUPERSET_SECRET_KEY", "movidesk_superset_super_secret_key_2026")
+        env.setdefault("FLASK_APP", "superset")
         subprocess.Popen(
             [superset_bin, "run", "-h", "0.0.0.0", "-p", "8088", "--with-threads"],
             env=env,
@@ -215,12 +219,12 @@ def ensure_superset_online(base_url: str) -> None:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        for _ in range(30):
+        for _ in range(35):
             time.sleep(1.5)
             try:
                 with urllib.request.urlopen(health_url, timeout=3) as resp:
                     if resp.status == 200:
-                        print("[OK] Servidor Apache Superset iniciado com sucesso.")
+                        print("[OK] Servidor Apache Superset iniciado com sucesso.", flush=True)
                         return
             except Exception:
                 pass
@@ -235,31 +239,53 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
     """
     Testa se o IP configurado na SQLAlchemy URI (ex: 172.29.112.1:1433) responde.
     Caso o WSL2 tenha trocado o IP do vSwitch após reinicialização, detecta automaticamente
-    o gateway padrão do WSL2 na porta 1433.
+    o gateway padrão do WSL2, o nameserver de /etc/resolv.conf ou 127.0.0.1 na porta 1433.
     """
-    try:
-        parsed = urllib.parse.urlSplit(preferred_uri) if hasattr(urllib.parse, "urlSplit") else urllib.parse.urlsplit(preferred_uri)
-        host = parsed.hostname
-        port = parsed.port or 1433
-        if host:
-            with socket.create_connection((host, port), timeout=2.0):
-                return preferred_uri
-    except Exception:
-        pass
+    parsed = urllib.parse.urlsplit(preferred_uri)
+    preferred_host = parsed.hostname or "172.29.112.1"
+    port = parsed.port or 1433
 
-    # Tenta descobrir gateway padrão do WSL2
+    candidate_hosts: List[str] = [preferred_host]
+
     try:
         out = subprocess.check_output(["ip", "route", "show", "default"], text=True, timeout=2)
-        for token_idx, token in enumerate(out.split()):
-            if token == "via" and token_idx + 1 < len(out.split()):
-                gw_ip = out.split()[token_idx + 1]
-                with socket.create_connection((gw_ip, 1433), timeout=2.0):
-                    updated_uri = preferred_uri.replace("@172.29.112.1:", f"@{gw_ip}:")
-                    print(f"[INFO] Host WSL2 detectado automaticamente em {gw_ip}:1433.")
-                    return updated_uri
+        tokens = out.split()
+        for token_idx, token in enumerate(tokens):
+            if token == "via" and token_idx + 1 < len(tokens):
+                gw_ip = tokens[token_idx + 1]
+                if gw_ip not in candidate_hosts:
+                    candidate_hosts.append(gw_ip)
     except Exception:
         pass
 
+    try:
+        if os.path.isfile("/etc/resolv.conf"):
+            with open("/etc/resolv.conf", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 2 and parts[0] == "nameserver":
+                        ns_ip = parts[1]
+                        if ns_ip not in candidate_hosts:
+                            candidate_hosts.append(ns_ip)
+    except Exception:
+        pass
+
+    if "127.0.0.1" not in candidate_hosts:
+        candidate_hosts.append("127.0.0.1")
+
+    for candidate in candidate_hosts:
+        try:
+            with socket.create_connection((candidate, port), timeout=2.0):
+                if candidate != preferred_host:
+                    updated_uri = preferred_uri.replace(f"@{preferred_host}:", f"@{candidate}:")
+                    print(f"[INFO] Host SQL Server WSL2 detectado automaticamente em {candidate}:{port}.", flush=True)
+                    return updated_uri
+                print(f"[OK] Conectividade TCP com SQL Server confirmada em {candidate}:{port}.", flush=True)
+                return preferred_uri
+        except Exception:
+            continue
+
+    print(f"[INFO] Mantendo URI padrão ({preferred_host}:{port}).", flush=True)
     return preferred_uri
 
 

@@ -395,27 +395,44 @@ public sealed class SupersetService : IDisposable
                 .Replace("\r\n", "\n", StringComparison.Ordinal)
                 .Replace("\r", "\n", StringComparison.Ordinal);
 
+            // Também persiste o script ao lado do executável como fallback local
+            try
+            {
+                string localScriptPath = Path.Combine(AppContext.BaseDirectory, "setup_superset_auto.py");
+                File.WriteAllText(localScriptPath, scriptContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            }
+            catch
+            {
+                // Ignora caso o diretório não permita escrita; o stream via StandardInput é o canal primário
+            }
+
             string scriptB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(scriptContent));
             string userB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(adminUsername.Trim()));
             string passB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(adminPassword));
             string urlB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(_supersetUrl));
 
+            // IMPORTANTE: O Windows (CreateProcessW) impõe limite estrito de 32.767 caracteres na linha de comando.
+            // Por isso, o script (~56 KB em Base64) é transmitido via StandardInput (stdin) para `base64 -d`,
+            // mantendo a linha de comando do wsl.exe enxuta (~330 caracteres).
             string bashCmd =
-                $"echo '{scriptB64}' | base64 -d > /tmp/setup_superset_auto.py && " +
+                $"base64 -d > /tmp/setup_superset_auto.py && " +
+                $"if [ ! -s /tmp/setup_superset_auto.py ] && [ -f ./setup_superset_auto.py ]; then cp -f ./setup_superset_auto.py /tmp/setup_superset_auto.py; fi && " +
                 $"USR=$(echo '{userB64}' | base64 -d) && " +
                 $"PASS=$(echo '{passB64}' | base64 -d) && " +
                 $"URL=$(echo '{urlB64}' | base64 -d) && " +
                 $"PY_BIN=\"$HOME/superset-env/bin/python\"; " +
                 $"if [ ! -x \"$PY_BIN\" ]; then PY_BIN=python3; fi; " +
-                $"\"$PY_BIN\" -u /tmp/setup_superset_auto.py --url \"$URL\" --username \"$USR\" --password \"$PASS\"";
+                $"\"$PY_BIN\" -u /tmp/setup_superset_auto.py --url \"$URL\" --username \"$USR\" --password \"$PASS\" < /dev/null";
 
             AppendSetupLog($"[INF] Acionando automação Python no WSL2 ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)}) para o usuário '{adminUsername.Trim()}'...");
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = OperatingSystem.IsWindows() ? "wsl.exe" : "bash",
+                WorkingDirectory = AppContext.BaseDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8,
@@ -469,6 +486,12 @@ public sealed class SupersetService : IDisposable
 
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
+
+            // Transmite o script em Base64 via StandardInput e fecha o stream (EOF) para liberar a execução no bash
+            byte[] scriptB64Bytes = Encoding.ASCII.GetBytes(scriptB64);
+            await process.StandardInput.BaseStream.WriteAsync(scriptB64Bytes);
+            await process.StandardInput.BaseStream.FlushAsync();
+            process.StandardInput.Close();
 
             await process.WaitForExitAsync();
             process.WaitForExit(); // Garante flush completo dos buffers assíncronos de stdout/stderr
