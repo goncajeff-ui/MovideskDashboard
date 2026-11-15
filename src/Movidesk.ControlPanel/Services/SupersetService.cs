@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 
 namespace Movidesk.ControlPanel.Services;
@@ -13,7 +15,8 @@ public enum SupersetStatus
 
 /// <summary>
 /// Orquestra a inicialização silenciosa do Apache Superset dentro do WSL2 (Ubuntu)
-/// via System.Diagnostics.Process e monitora o endpoint /health.
+/// via System.Diagnostics.Process, monitora o endpoint /health e executa a automação
+/// completa de configuração inicial (Database, 8 Datasets mart e Dashboard Sala de Guerra).
 /// </summary>
 public sealed class SupersetService : IDisposable
 {
@@ -31,15 +34,22 @@ public sealed class SupersetService : IDisposable
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(2) };
     private readonly object _stateLock = new();
     private readonly List<string> _logs = new();
+    private readonly List<string> _setupLogs = new();
     private Process? _wslProcess;
     private CancellationTokenSource? _startupCts;
 
     public SupersetStatus Status { get; private set; } = SupersetStatus.Offline;
     public string StatusMessage { get; private set; } = "Superset parado";
     public string SupersetUrl => _supersetUrl;
+    public string DashboardUrl => $"{_supersetUrl.TrimEnd('/')}/superset/dashboard/sala-de-guerra-movidesk/";
     public int Port => _port;
     public string WslDistro => _wslDistro;
     public string VenvActivatePath => _venvActivatePath;
+
+    public bool IsSetupRunning { get; private set; }
+    public bool? SetupSucceeded { get; private set; }
+    public string SetupStatusMessage { get; private set; } =
+        "Pronto para provisionar a conexão MovideskDM, os 8 Datasets (schema mart) e o Dashboard Sala de Guerra.";
 
     public event Action? OnStateChanged;
 
@@ -61,6 +71,27 @@ public sealed class SupersetService : IDisposable
         }
     }
 
+    public IReadOnlyList<string> GetSetupLogsSnapshot()
+    {
+        lock (_stateLock)
+        {
+            return _setupLogs.ToList();
+        }
+    }
+
+    public void ClearSetupLogs()
+    {
+        lock (_stateLock)
+        {
+            if (IsSetupRunning) return;
+            _setupLogs.Clear();
+            SetupSucceeded = null;
+            SetupStatusMessage =
+                "Pronto para provisionar a conexão MovideskDM, os 8 Datasets (schema mart) e o Dashboard Sala de Guerra.";
+        }
+        NotifyStateChanged();
+    }
+
     /// <summary>
     /// Abre o Apache Superset no navegador padrão do Windows.
     /// </summary>
@@ -73,6 +104,21 @@ public sealed class SupersetService : IDisposable
         catch (Exception ex)
         {
             AppendLog($"[AVISO] Não foi possível abrir o navegador automaticamente: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Abre diretamente o Dashboard "Sala de Guerra - Movidesk BI" no navegador padrão.
+    /// </summary>
+    public void OpenDashboardInBrowser()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(DashboardUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppendSetupLog($"[AVISO] Não foi possível abrir o navegador automaticamente: {ex.Message}");
         }
     }
 
@@ -309,6 +355,172 @@ public sealed class SupersetService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Executa silenciosamente o script Python de setup automático (setup_superset_auto.py) dentro do WSL2,
+    /// passando a senha do usuário admin informada na interface gráfica e capturando stdout/stderr em tempo real.
+    /// </summary>
+    public async Task RunAutoSetupAsync(string adminPassword, string adminUsername = "admin")
+    {
+        lock (_stateLock)
+        {
+            if (IsSetupRunning)
+            {
+                return;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(adminPassword))
+        {
+            lock (_stateLock)
+            {
+                SetupSucceeded = false;
+                SetupStatusMessage = "Informe a senha do usuário admin antes de executar o setup.";
+            }
+            AppendSetupLog("[AVISO] Digite a senha do usuário admin do Apache Superset no campo acima.");
+            return;
+        }
+
+        lock (_stateLock)
+        {
+            IsSetupRunning = true;
+            SetupSucceeded = null;
+            SetupStatusMessage = "Iniciando automação do Apache Superset no WSL2...";
+            _setupLogs.Clear();
+        }
+        NotifyStateChanged();
+
+        try
+        {
+            string scriptContent = LoadSetupScriptContent()
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace("\r", "\n", StringComparison.Ordinal);
+
+            string scriptB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(scriptContent));
+            string userB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(adminUsername.Trim()));
+            string passB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(adminPassword));
+            string urlB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(_supersetUrl));
+
+            string bashCmd =
+                $"echo '{scriptB64}' | base64 -d > /tmp/setup_superset_auto.py && " +
+                $"USR=$(echo '{userB64}' | base64 -d) && " +
+                $"PASS=$(echo '{passB64}' | base64 -d) && " +
+                $"URL=$(echo '{urlB64}' | base64 -d) && " +
+                $"PY_BIN=\"$HOME/superset-env/bin/python\"; " +
+                $"if [ ! -x \"$PY_BIN\" ]; then PY_BIN=python3; fi; " +
+                $"\"$PY_BIN\" -u /tmp/setup_superset_auto.py --url \"$URL\" --username \"$USR\" --password \"$PASS\"";
+
+            AppendSetupLog($"[INF] Acionando automação Python no WSL2 ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)}) para o usuário '{adminUsername.Trim()}'...");
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = OperatingSystem.IsWindows() ? "wsl.exe" : "bash",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+
+            if (OperatingSystem.IsWindows())
+            {
+                if (!string.IsNullOrWhiteSpace(_wslDistro))
+                {
+                    startInfo.ArgumentList.Add("-d");
+                    startInfo.ArgumentList.Add(_wslDistro);
+                }
+                startInfo.ArgumentList.Add("-e");
+                startInfo.ArgumentList.Add("bash");
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add(bashCmd);
+            }
+            else
+            {
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add(bashCmd);
+            }
+
+            using var process = new Process
+            {
+                StartInfo = startInfo,
+                EnableRaisingEvents = true
+            };
+
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    AppendSetupLog(e.Data);
+                }
+            };
+
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    AppendSetupLog(e.Data);
+                }
+            };
+
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Não foi possível iniciar o processo wsl.exe para o setup do Superset.");
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            await process.WaitForExitAsync();
+            process.WaitForExit(); // Garante flush completo dos buffers assíncronos de stdout/stderr
+
+            bool ok = process.ExitCode == 0;
+            lock (_stateLock)
+            {
+                IsSetupRunning = false;
+                SetupSucceeded = ok;
+                SetupStatusMessage = ok
+                    ? "Setup concluído com sucesso! Database MovideskDM, 8 Datasets (mart) e Dashboard Sala de Guerra publicados."
+                    : $"O setup encerrou com falha (código {process.ExitCode}). Verifique os logs no console abaixo.";
+            }
+            NotifyStateChanged();
+
+            // Atualiza também o status de saúde do Superset (caso o script tenha subido o servidor)
+            await CheckHealthAsync();
+        }
+        catch (Exception ex)
+        {
+            lock (_stateLock)
+            {
+                IsSetupRunning = false;
+                SetupSucceeded = false;
+                SetupStatusMessage = $"Erro ao executar setup automático: {ex.Message}";
+            }
+            AppendSetupLog($"[ERRO] {ex.Message}");
+            NotifyStateChanged();
+        }
+    }
+
+    private static string LoadSetupScriptContent()
+    {
+        const string resourceName = "Movidesk.ControlPanel.Superset.setup_superset_auto.py";
+        var assembly = Assembly.GetExecutingAssembly();
+        using Stream? stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream is not null)
+        {
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+
+        // Fallback em ambiente de desenvolvimento caso o recurso embarcado não seja encontrado
+        string candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "superset", "setup_superset_auto.py"));
+        if (File.Exists(candidate))
+        {
+            return File.ReadAllText(candidate, Encoding.UTF8);
+        }
+
+        throw new FileNotFoundException($"Recurso embarcado '{resourceName}' não encontrado no executável.");
+    }
+
     private async Task WaitForHealthyAsync(Process process, CancellationToken ct)
     {
         const int maxTentativas = 40; // ~60 segundos (40 x 1.5s)
@@ -382,6 +594,25 @@ public sealed class SupersetService : IDisposable
             if (_logs.Count > 150)
             {
                 _logs.RemoveAt(0);
+            }
+        }
+        NotifyStateChanged();
+    }
+
+    private void AppendSetupLog(string message)
+    {
+        var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
+        lock (_stateLock)
+        {
+            _setupLogs.Add(line);
+            if (_setupLogs.Count > 250)
+            {
+                _setupLogs.RemoveAt(0);
+            }
+
+            if (IsSetupRunning && (message.StartsWith("[OK]", StringComparison.Ordinal) || message.StartsWith("[INFO]", StringComparison.Ordinal)))
+            {
+                SetupStatusMessage = message;
             }
         }
         NotifyStateChanged();

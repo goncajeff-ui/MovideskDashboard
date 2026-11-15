@@ -35,6 +35,7 @@
     </None>
     <EmbeddedResource Include="..\..\database\03_views_kpis.sql" LogicalName="Movidesk.ControlPanel.Sql.03_views_kpis.sql" />
     <EmbeddedResource Include="..\..\database\04_procedure_processamento.sql" LogicalName="Movidesk.ControlPanel.Sql.04_procedure_processamento.sql" />
+    <EmbeddedResource Include="..\..\superset\setup_superset_auto.py" LogicalName="Movidesk.ControlPanel.Superset.setup_superset_auto.py" />
   </ItemGroup>
 
 </Project>

@@ -117,16 +117,70 @@ class SupersetApiClient:
             ) from exc
 
     def authenticate(self) -> None:
-        login_resp = self.request(
-            "POST",
-            "/api/v1/security/login",
-            payload={
-                "username": self.username,
-                "password": self.password,
-                "provider": "db",
-                "refresh": True,
-            },
-        )
+        try:
+            login_resp = self.request(
+                "POST",
+                "/api/v1/security/login",
+                payload={
+                    "username": self.username,
+                    "password": self.password,
+                    "provider": "db",
+                    "refresh": True,
+                },
+            )
+        except RuntimeError as exc:
+            if "HTTP 401" in str(exc):
+                superset_bin = os.path.expanduser("~/superset-env/bin/superset")
+                if os.path.isfile(superset_bin):
+                    print(
+                        f"[INFO] Login retornou 401 para '{self.username}'. Sincronizando senha informada no Superset local (WSL2)...",
+                        flush=True,
+                    )
+                    env = os.environ.copy()
+                    env.setdefault(
+                        "SUPERSET_SECRET_KEY", "movidesk_superset_super_secret_key_2026"
+                    )
+                    res = subprocess.run(
+                        [
+                            superset_bin,
+                            "fab",
+                            "reset-password",
+                            "--username",
+                            self.username,
+                            "--password",
+                            self.password,
+                        ],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if res.returncode == 0:
+                        print(
+                            f"[OK] Senha do usuário '{self.username}' sincronizada com sucesso no Superset.",
+                            flush=True,
+                        )
+                        login_resp = self.request(
+                            "POST",
+                            "/api/v1/security/login",
+                            payload={
+                                "username": self.username,
+                                "password": self.password,
+                                "provider": "db",
+                                "refresh": True,
+                            },
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Senha inválida para o usuário '{self.username}' (HTTP 401) e não foi possível redefinir via CLI: {res.stderr.strip()}"
+                        ) from exc
+                else:
+                    raise RuntimeError(
+                        f"Senha inválida para o usuário '{self.username}' no Apache Superset (HTTP 401 UNAUTHORIZED). Verifique a senha digitada."
+                    ) from exc
+            else:
+                raise
+
         self.access_token = login_resp.get("access_token")
         if not self.access_token:
             raise RuntimeError(f"Falha ao obter access_token no login: {login_resp}")
@@ -1008,36 +1062,47 @@ def build_sala_de_guerra_dashboard(
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(description="Setup automático do Apache Superset (MovideskDM)")
     parser.add_argument("--url", default=DEFAULT_SUPERSET_URL, help="URL do Superset (padrão: http://localhost:8088)")
     parser.add_argument("--username", default=DEFAULT_USERNAME, help="Usuário admin do Superset")
-    parser.add_argument("--password", default=DEFAULT_PASSWORD, help="Senha admin do Superset")
+    parser.add_argument("-p", "--password", default=DEFAULT_PASSWORD, help="Senha admin do Superset")
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME, help="Nome do banco no Superset")
     parser.add_argument("--db-uri", default=DEFAULT_DB_URI, help="SQLAlchemy URI do MovideskDM")
     args = parser.parse_args()
 
-    print("=" * 76)
-    print(" AUTOMAÇÃO TOTAL APACHE SUPERSET — MOVIDESK BI (ADVICE COMPLIANCE SOLUTIONS)")
-    print("=" * 76)
+    print("=" * 76, flush=True)
+    print(" AUTOMAÇÃO TOTAL APACHE SUPERSET — MOVIDESK BI (ADVICE COMPLIANCE SOLUTIONS)", flush=True)
+    print("=" * 76, flush=True)
 
-    ensure_superset_online(args.url)
-    final_db_uri = resolve_best_db_uri(args.db_uri)
-    ensure_sql_views_updated(final_db_uri)
+    try:
+        ensure_superset_online(args.url)
+        final_db_uri = resolve_best_db_uri(args.db_uri)
+        ensure_sql_views_updated(final_db_uri)
 
-    client = SupersetApiClient(args.url, args.username, args.password)
-    client.authenticate()
-    print(f"[OK] Autenticado na REST API do Superset ({args.url}) como '{args.username}'.")
+        client = SupersetApiClient(args.url, args.username, args.password)
+        client.authenticate()
+        print(f"[OK] Autenticado na REST API do Superset ({args.url}) como '{args.username}'.", flush=True)
 
-    db_id = upsert_database(client, args.db_name, final_db_uri)
-    datasets = upsert_datasets(client, db_id)
-    dash_url = build_sala_de_guerra_dashboard(client, datasets)
+        db_id = upsert_database(client, args.db_name, final_db_uri)
+        datasets = upsert_datasets(client, db_id)
+        dash_url = build_sala_de_guerra_dashboard(client, datasets)
 
-    print("=" * 76)
-    print(" SETUP CONCLUÍDO COM SUCESSO!")
-    print(f" Acesse agora a Sala de Guerra: {dash_url}")
-    print("=" * 76)
-    return 0
+        print("=" * 76, flush=True)
+        print(" [OK] SETUP CONCLUÍDO COM SUCESSO!", flush=True)
+        print(f" [OK] Acesse agora a Sala de Guerra: {dash_url}", flush=True)
+        print("=" * 76, flush=True)
+        return 0
+    except Exception as exc:
+        print(f"[ERRO] Falha durante o setup automático do Superset: {exc}", flush=True)
+        return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

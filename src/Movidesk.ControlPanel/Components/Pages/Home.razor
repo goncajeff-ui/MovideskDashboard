@@ -256,6 +256,117 @@
         </section>
 
         <!-- ===============================================================
+             CARD: CONFIGURAÇÃO INICIAL DO SUPERSET (AUTOMAÇÃO PYTHON / WSL2)
+             =============================================================== -->
+        <section class="card card-full">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <h2>Configuração Inicial do Superset</h2>
+                    <span class="card-subtitle">Provisiona automaticamente a Database Connection (<code>MovideskDM</code>), os 8 Datasets (<code>schema mart</code>) e o Dashboard <strong>Sala de Guerra</strong></span>
+                </div>
+                <span class="badge @GetSupersetSetupBadgeClass()">
+                    @if (SupersetService.IsSetupRunning)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <span class="status-dot" aria-hidden="true"></span>
+                    }
+                    @GetSupersetSetupBadgeText()
+                </span>
+            </div>
+
+            <div class="card-body">
+                <div class="status-banner @(SupersetService.SetupSucceeded == false ? "status-banner-error" : SupersetService.SetupSucceeded == true ? "status-banner-ok" : "")">
+                    @if (SupersetService.IsSetupRunning)
+                    {
+                        <span class="spinner" aria-hidden="true"></span>
+                    }
+                    <span>@SupersetService.SetupStatusMessage</span>
+                </div>
+
+                <div class="controls-row">
+                    <div class="actions-row" style="align-items: flex-end;">
+                        <div class="input-group">
+                            <label for="superset-admin-pass">Senha do usuário <code>admin</code> (Superset)</label>
+                            <input id="superset-admin-pass"
+                                   type="password"
+                                   class="input-control"
+                                   style="width: 260px;"
+                                   placeholder="Digite a senha do admin..."
+                                   @bind="_supersetAdminPassword"
+                                   @bind:event="oninput"
+                                   disabled="@SupersetService.IsSetupRunning" />
+                        </div>
+
+                        <button type="button"
+                                class="btn btn-primary"
+                                @onclick="ExecutarSetupSupersetAsync"
+                                disabled="@SupersetService.IsSetupRunning">
+                            @if (SupersetService.IsSetupRunning)
+                            {
+                                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                                <span>Executando Setup Automático...</span>
+                            }
+                            else
+                            {
+                                <span>Executar Setup Automático</span>
+                            }
+                        </button>
+
+                        @if (SupersetService.SetupSucceeded == true || SupersetService.Status == SupersetStatus.Online)
+                        {
+                            <button type="button"
+                                    class="btn btn-success"
+                                    @onclick="SupersetService.OpenDashboardInBrowser">
+                                Abrir Sala de Guerra ↗
+                            </button>
+                        }
+
+                        <button type="button"
+                                class="btn btn-ghost"
+                                @onclick="SupersetService.ClearSetupLogs"
+                                disabled="@SupersetService.IsSetupRunning">
+                            Limpar Console
+                        </button>
+                    </div>
+
+                    <div class="meta-row">
+                        <span class="meta-chip"><strong>1. Database:</strong> <code>MovideskDM</code> (MSSQL)</span>
+                        <span class="meta-chip"><strong>2. Datasets:</strong> 8 Views <code>mart.vw_*</code></span>
+                        <span class="meta-chip"><strong>3. Dashboard:</strong> Sala de Guerra (13 gráficos)</span>
+                    </div>
+                </div>
+
+                @{
+                    var setupLogs = SupersetService.GetSetupLogsSnapshot();
+                }
+                <div class="console-box console-box-compact">
+                    <div class="console-header">
+                        <span>Console do Setup Automático do Superset (stdout / stderr via WSL2)</span>
+                        <span class="muted">@setupLogs.Count linha(s)</span>
+                    </div>
+                    <div class="console-log">
+                        @if (setupLogs.Count == 0)
+                        {
+                            <div class="log-empty">
+                                Digite a senha do usuário <code>admin</code> do Apache Superset e clique em "Executar Setup Automático" para criar a conexão MovideskDM, registrar as 8 views do schema mart e publicar o Dashboard Sala de Guerra.
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var line in setupLogs.AsEnumerable().Reverse())
+                            {
+                                <div class="log-line @GetLogCssClass(line)">@line</div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===============================================================
              CARD 3: ORQUESTRADOR DE CARGA DE DADOS (ANTI-TRAVAMENTO)
              =============================================================== -->
         <section class="card card-full">
@@ -423,6 +534,7 @@
     private bool _autoRefresh = true;
     private bool _atualizandoVolumetria;
     private bool _verificandoSuperset;
+    private string _supersetAdminPassword = string.Empty;
     private bool _disposed;
     private CancellationTokenSource? _timerCts;
 
@@ -492,6 +604,8 @@
     private Task IniciarSupersetAsync() => SupersetService.StartSupersetAsync();
 
     private Task PararSupersetAsync() => SupersetService.StopSupersetAsync();
+
+    private Task ExecutarSetupSupersetAsync() => SupersetService.RunAutoSetupAsync(_supersetAdminPassword);
 
     private async Task VerificarSupersetAsync()
     {
@@ -575,6 +689,22 @@
         _ => "Offline"
     };
 
+    private string GetSupersetSetupBadgeClass()
+    {
+        if (SupersetService.IsSetupRunning) return "badge-running";
+        if (SupersetService.SetupSucceeded == true) return "badge-online";
+        if (SupersetService.SetupSucceeded == false) return "badge-error";
+        return "badge-offline";
+    }
+
+    private string GetSupersetSetupBadgeText()
+    {
+        if (SupersetService.IsSetupRunning) return "Configurando...";
+        if (SupersetService.SetupSucceeded == true) return "Concluído";
+        if (SupersetService.SetupSucceeded == false) return "Erro";
+        return "Pronto";
+    }
+
     private string GetIngestionBadgeClass() => IngestionService.CurrentStage switch
     {
         IngestionStage.Extracting or IngestionStage.SavingToDatabase or IngestionStage.ProcessingCore => "badge-running",
@@ -589,7 +719,7 @@
         if (line.Contains("[OK]", StringComparison.Ordinal)) return "log-ok";
         if (line.Contains("[WRN]", StringComparison.Ordinal) || line.Contains("[AVISO]", StringComparison.Ordinal)) return "log-wrn";
         if (line.Contains("[ERR]", StringComparison.Ordinal) || line.Contains("[ERRO]", StringComparison.Ordinal)) return "log-err";
-        if (line.Contains("[INF]", StringComparison.Ordinal)) return "log-inf";
+        if (line.Contains("[INF]", StringComparison.Ordinal) || line.Contains("[INFO]", StringComparison.Ordinal)) return "log-inf";
         return string.Empty;
     }
 
