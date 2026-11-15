@@ -208,3 +208,26 @@ As alterações das evoluções `05` a `08` já estão **consolidadas** nos scri
   - [`SqlDatabaseDeployer.cs`](../../src/Movidesk.Installer/Core/SqlDatabaseDeployer.cs): Elimina a dependência de ferramentas externas de linha de comando (`sqlcmd.exe` ou SSMS). Executa o provisionamento nativamente em C# via `Microsoft.Data.SqlClient` conectando ao `master`, criando o banco `[MovideskDM]` e aplicando todos os scripts SQL embutidos dividindo em lotes por regex `^\s*GO\s*$`.
   - [`FrmInstalador.cs`](../../src/Movidesk.Installer/UI/FrmInstalador.cs): Interface gráfica moderna em WinForms .NET 8 com layout dinâmico adaptado às 4 etapas, barra de progresso em tempo real, console de log colorido e formulário de inputs com testes de conexão.
 - **CI/CD ([`.github/workflows/build-windows-exe.yml`](../../.github/workflows/build-windows-exe.yml) + [`Gerar_Instalador.bat`](../../Gerar_Instalador.bat)):** Publica em cada push na `main` o executável do Instalador Único `MovideskInstaller-Dashboard-Movidesk-BI.exe` (~100 MB com tudo embutido) + `MovideskControlPanel-win-x64.zip` standalone + os 4 Manuais em PDF anexados diretamente na GitHub Release.
+
+---
+
+### Fase 9 — Unificação Arquitetural Docker Host Mode, Teste Real Interno com pymssql e Retry Robusto na Etapa 4 (15/11/2026)
+
+Esta fase eliminou os conflitos de porta 8088 e o isolamento de rede entre contêiner Docker e SQL Server no Windows host que causavam a falha na Etapa 4:
+
+1. **Unificação do Gerenciamento Superset no `SupersetService.cs` (Painel de Controle):**
+   - Substituição de chamadas legadas ao virtualenv `~/superset-env` pelo ciclo de vida Docker (`docker start advice_movidesk_superset`).
+   - Verificação prévia de `http://localhost:8088/health`: se já estiver respondendo, não sobe novo processo concorrente, evitando o erro `Address already in use / Port 8088 is in use by another program`.
+   - Botão "Parar" configurado para parar o contêiner Docker (`docker stop advice_movidesk_superset`) e limpar processos residuais.
+
+2. **Adoção de `network_mode: "host"` no `docker-compose.yml`:**
+   - Remoção do mapeamento `ports: - "8088:8088"` e da bridge network isolada. O contêiner agora compartilha diretamente o namespace de rede do WSL2 Ubuntu, eliminando o isolamento de NAT e permitindo acesso direto ao SQL Server no host Windows (`ROUTE_IP` / `172.x.x.1` ou `127.0.0.1`).
+
+3. **Teste Real de Conexão SQL Server de Dentro do Contêiner com `pymssql`:**
+   - Tanto no Instalador (`InstaladorManager.cs` / `setup_superset_auto.py`) quanto no Painel de Controle (`SupersetService.cs`), antes de criar a database `MovideskDM` e os Datasets, executa-se um teste real de conexão (`pymssql.connect()` + `SELECT 1`) **de dentro do contêiner Docker** testando múltiplos candidatos em ordem: IP do Windows no WSL (`ROUTE_IP` / `NS_IP`), `host.docker.internal`, `127.0.0.1` e `localhost`.
+   - A SQLAlchemy URI (`mssql+pymssql://...`) é montada e atualizada no Superset com o IP que respondeu com sucesso de dentro do contêiner, garantindo que o Superset consiga inspecionar os metadados das 9 views analíticas (`mart.*`) e criar todos os Datasets e Gráficos sem erros HTTP 400/422.
+
+4. **Retry Robusto de 90s na Etapa 4:**
+   - Após o restart do contêiner ao final da Etapa 3 (instalação de drivers ODBC e pymssql), a Etapa 4 aguarda até 90 segundos validando tanto `/health` quanto a REST API (`/api/v1/security/csrf_token/`) via C# `HttpClient` diretamente do host Windows antes de disparar o provisionamento.
+   - Logs detalhados de erros HTTP foram adicionados à criação de Datasets e Gráficos para diagnóstico imediato.
+

@@ -209,13 +209,20 @@ public sealed class SupersetService : IDisposable
         NotifyStateChanged();
 
         string comandoSuperset =
+            "if command -v docker >/dev/null 2>&1; then " +
             "service docker status >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true; " +
-            $"docker start {_containerName} 2>/dev/null || " +
-            "docker start advice_movidesk_superset 2>/dev/null || " +
-            "docker start superset-movidesk 2>/dev/null || " +
-            $"(cd {_composePath} 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || " +
-            "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || " +
-            "(cd /opt/movidesk-superset 2>/dev/null && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)) || true";
+            "if docker ps -a --format '{{.Names}}' | grep -Eq '^(advice_movidesk_superset|superset-movidesk)$'; then " +
+            "docker start advice_movidesk_superset 2>/dev/null || docker start superset-movidesk 2>/dev/null; " +
+            $"elif [ -d '{_composePath}' ] && [ -f '{_composePath}/docker-compose.yml' ]; then " +
+            $"(cd {_composePath} && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
+            "elif [ -d '/opt/advice-movidesk-superset' ] && [ -f '/opt/advice-movidesk-superset/docker-compose.yml' ]; then " +
+            "(cd /opt/advice-movidesk-superset && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
+            "elif [ -d '/opt/movidesk-superset' ] && [ -f '/opt/movidesk-superset/docker-compose.yml' ]; then " +
+            "(cd /opt/movidesk-superset && (docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null)); " +
+            "fi; " +
+            "elif [ -f ~/superset-env/bin/activate ]; then " +
+            "source ~/superset-env/bin/activate && export SUPERSET_SECRET_KEY='movidesk_superset_super_secret_key_2026' && export FLASK_APP=superset && nohup superset run -h 0.0.0.0 -p 8088 --with-threads >/tmp/superset.log 2>&1 & " +
+            "fi || true";
 
         AppendLog($"Executando WSL ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)} - Docker Engine)...");
 
@@ -279,20 +286,11 @@ public sealed class SupersetService : IDisposable
 
                 if (exitCode.HasValue && exitCode.Value != 0)
                 {
-                    lock (_stateLock)
-                    {
-                        if (Status == SupersetStatus.Starting)
-                        {
-                            Status = SupersetStatus.Error;
-                            StatusMessage = $"Inicialização do Superset falhou no WSL (código {exitCode.Value}).";
-                        }
-                    }
-                    AppendLog($"Processo WSL finalizado com código {exitCode.Value}.");
-                    NotifyStateChanged();
+                    AppendLog($"Script de inicialização do WSL encerrou com código {exitCode.Value}. Aguardando resposta do Superset em /health...");
                 }
                 else
                 {
-                    AppendLog("Processo de inicialização do Docker concluído no WSL.");
+                    AppendLog("Processo de inicialização do Docker concluído no WSL. Aguardando servidor responder...");
                 }
             };
 
@@ -335,11 +333,13 @@ public sealed class SupersetService : IDisposable
             }
 
             string comandoStop =
-                $"docker stop {_containerName} 2>/dev/null || " +
+                "if command -v docker >/dev/null 2>&1; then " +
                 "docker stop advice_movidesk_superset 2>/dev/null || " +
+                $"docker stop {_containerName} 2>/dev/null || " +
                 "docker stop superset-movidesk 2>/dev/null || " +
                 $"(cd {_composePath} 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
-                "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || " +
+                "(cd /opt/advice-movidesk-superset 2>/dev/null && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || true; " +
+                "fi; " +
                 "pkill -f '[s]uperset run' 2>/dev/null || true";
 
             if (OperatingSystem.IsWindows())
@@ -498,8 +498,25 @@ public sealed class SupersetService : IDisposable
             AppendSetupLog($"[OK] Autenticado na REST API do Superset ({_supersetUrl}) como '{username}'.");
 
             // 2. Passo 1/3: Criar ou Atualizar Database MovideskDM
-            AppendSetupLog("[INF] Passo 1/3 — Verificando conexão Database 'MovideskDM'...");
-            int dbId = await UpsertDatabaseAsync(apiClient, "MovideskDM", _supersetDbUri);
+            var (sqlUser, sqlPass, sqlDb, sqlPort, configuredHost) = ParseDbCredentials();
+            string targetDbUri = _supersetDbUri;
+
+            AppendSetupLog("[INF] Passo 1/3 — Validando conectividade com SQL Server de dentro do contêiner Docker...");
+            string? workingHost = await ProbeWorkingSqlHostInsideContainerAsync(
+                sqlUser, sqlPass, sqlDb, sqlPort, [configuredHost]);
+
+            if (!string.IsNullOrWhiteSpace(workingHost))
+            {
+                targetDbUri = $"mssql+pymssql://{Uri.EscapeDataString(sqlUser)}:{Uri.EscapeDataString(sqlPass)}@{workingHost}:{sqlPort}/{Uri.EscapeDataString(sqlDb)}";
+                AppendSetupLog($"[OK] Conexão com SQL Server validada com sucesso de dentro do contêiner em: {workingHost}:{sqlPort} (driver pymssql).");
+            }
+            else
+            {
+                AppendSetupLog($"[AVISO] Teste interno de SQL Server não detectou host alternativo; utilizando URI configurada: {targetDbUri}");
+            }
+
+            AppendSetupLog($"[INF] Passo 1/3 — Configurando conexão Database 'MovideskDM' no Superset...");
+            int dbId = await UpsertDatabaseAsync(apiClient, "MovideskDM", targetDbUri);
 
             // 3. Passo 2/3: Criar ou Sincronizar os 9 Datasets do schema mart
             AppendSetupLog($"[INF] Passo 2/3 — Sincronizando {MartViews.Length} Datasets (schema 'mart') e protegendo filtro 'Equipe'...");
@@ -531,6 +548,140 @@ public sealed class SupersetService : IDisposable
             AppendSetupLog($"[ERRO] {ex.Message}");
             NotifyStateChanged();
         }
+    }
+
+    private (string User, string Pass, string Database, int Port, string Host) ParseDbCredentials()
+    {
+        string user = "sa";
+        string pass = "123456";
+        string database = "MovideskDM";
+        int port = 1433;
+        string host = "127.0.0.1";
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_supersetDbUri))
+            {
+                string pseudo = _supersetDbUri
+                    .Replace("mssql+pymssql://", "http://")
+                    .Replace("mssql+pyodbc://", "http://");
+                if (Uri.TryCreate(pseudo, UriKind.Absolute, out var uri))
+                {
+                    if (!string.IsNullOrWhiteSpace(uri.UserInfo))
+                    {
+                        var parts = uri.UserInfo.Split(':');
+                        if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0])) user = Uri.UnescapeDataString(parts[0]);
+                        if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) pass = Uri.UnescapeDataString(parts[1]);
+                    }
+                    if (!string.IsNullOrWhiteSpace(uri.Host)) host = uri.Host;
+                    if (uri.Port > 0) port = uri.Port;
+                    string dbPart = uri.AbsolutePath.Trim('/');
+                    if (!string.IsNullOrWhiteSpace(dbPart)) database = Uri.UnescapeDataString(dbPart);
+                }
+            }
+        }
+        catch
+        {
+            // Mantém valores padrão
+        }
+
+        return (user, pass, database, port, host);
+    }
+
+    private async Task<string?> ProbeWorkingSqlHostInsideContainerAsync(
+        string user,
+        string password,
+        string database,
+        int port,
+        IEnumerable<string> candidateHosts,
+        CancellationToken cancellationToken = default)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        try
+        {
+            var hostsList = candidateHosts.Where(h => !string.IsNullOrWhiteSpace(h)).Distinct().ToList();
+            string escapedUser = user.Replace("\"", "\\\"");
+            string escapedPass = password.Replace("\"", "\\\"");
+            string escapedDb = database.Replace("\"", "\\\"");
+
+            string inlinePy =
+                "import sys, pymssql\\n" +
+                "u, p, db, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])\\n" +
+                "candidates = sys.argv[5:]\\n" +
+                "found = None\\n" +
+                "for h in candidates:\\n" +
+                "    if not h: continue\\n" +
+                "    try:\\n" +
+                "        c = pymssql.connect(server=h, port=port, user=u, password=p, database=db, login_timeout=3)\\n" +
+                "        cur = c.cursor()\\n" +
+                "        cur.execute('SELECT 1')\\n" +
+                "        cur.fetchone()\\n" +
+                "        c.close()\\n" +
+                "        print(f'[SQL_HOST_OK]{h}')\\n" +
+                "        found = h\\n" +
+                "        break\\n" +
+                "    except Exception as e:\\n" +
+                "        pass\\n" +
+                "sys.exit(0 if found else 1)";
+
+            string probeScript =
+                "ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}'); " +
+                "NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true); " +
+                $"docker exec {_containerName} /app/.venv/bin/python -c \"{inlinePy}\" " +
+                $"\"{escapedUser}\" \"{escapedPass}\" \"{escapedDb}\" \"{port}\" " +
+                "\"$ROUTE_IP\" \"$NS_IP\" \"host.docker.internal\" \"127.0.0.1\" \"172.20.48.1\" \"172.29.112.1\" " +
+                string.Join(" ", hostsList.Select(h => $"\"{h}\""));
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = ResolveWslExecutablePath(),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            if (!string.IsNullOrWhiteSpace(_wslDistro))
+            {
+                psi.ArgumentList.Add("-d");
+                psi.ArgumentList.Add(_wslDistro);
+            }
+            psi.ArgumentList.Add("-u");
+            psi.ArgumentList.Add("root");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(probeScript);
+
+            using var proc = new Process { StartInfo = psi };
+            var output = new StringBuilder();
+            proc.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+            proc.Start();
+            proc.BeginOutputReadLine();
+            await proc.WaitForExitAsync(cancellationToken);
+
+            string outStr = output.ToString();
+            const string marker = "[SQL_HOST_OK]";
+            int idx = outStr.IndexOf(marker, StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                string line = outStr[idx..].Split(['\r', '\n'])[0];
+                string host = line[marker.Length..].Trim();
+                if (!string.IsNullOrWhiteSpace(host))
+                {
+                    return host;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendSetupLog($"[AVISO] Verificação prévia de conexão de dentro do contêiner retornou: {ex.Message}");
+        }
+
+        return null;
     }
 
     private async Task<string> AuthenticateSupersetAsync(HttpClient apiClient, string username, string password)
@@ -596,6 +747,7 @@ public sealed class SupersetService : IDisposable
         var payload = new JsonObject
         {
             ["database_name"] = dbName,
+            ["sqlalchemy_uri"] = dbUri,
             ["expose_in_sqllab"] = true,
             ["allow_ctas"] = false,
             ["allow_cvas"] = false,
@@ -605,55 +757,24 @@ public sealed class SupersetService : IDisposable
 
         if (existingId.HasValue)
         {
-            bool preserveExistingUri = false;
-            if (!_hasExplicitDbUri)
-            {
-                try
-                {
-                    var (dbDetailStatus, dbDetailBody) = await SendJsonRawAsync(
-                        apiClient, HttpMethod.Get, $"/api/v1/database/{existingId.Value}", null, timeoutSeconds: 60);
-                    if ((int)dbDetailStatus >= 200 && (int)dbDetailStatus < 300 && !string.IsNullOrWhiteSpace(dbDetailBody))
-                    {
-                        string? existingUri = JsonNode.Parse(dbDetailBody)?["result"]?["sqlalchemy_uri"]?.GetValue<string>();
-                        if (!string.IsNullOrWhiteSpace(existingUri) &&
-                            existingUri.Contains("MovideskDM", StringComparison.OrdinalIgnoreCase))
-                        {
-                            preserveExistingUri = true;
-                        }
-                    }
-                }
-                catch
-                {
-                    // Se não foi possível ler detalhes, segue fluxo padrão abaixo
-                }
-            }
-
-            if (!preserveExistingUri)
-            {
-                payload["sqlalchemy_uri"] = dbUri;
-            }
-
             try
             {
                 await SendJsonCheckedAsync(
                     apiClient, HttpMethod.Put, $"/api/v1/database/{existingId.Value}", payload, timeoutSeconds: 90, maxRetries: 1);
-                AppendSetupLog(preserveExistingUri
-                    ? $"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) validada preservando URI existente."
-                    : $"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) atualizada com sucesso.");
+                AppendSetupLog($"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) atualizada com URI '{dbUri}'.");
             }
             catch (Exception dbPutEx)
             {
                 AppendSetupLog(
-                    $"[AVISO] Passo 1/3 — Timeout/aviso ao atualizar metadados da Database '{dbName}' (ID={existingId.Value}): {dbPutEx.Message}. Prosseguindo com a conexão existente.");
+                    $"[AVISO] Passo 1/3 — Retorno ao atualizar metadados da Database '{dbName}' (ID={existingId.Value}): {dbPutEx.Message}. Prosseguindo.");
             }
             return existingId.Value;
         }
 
-        payload["sqlalchemy_uri"] = dbUri;
         var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/database/", payload, timeoutSeconds: 120, maxRetries: 1);
         int newId = created["id"]?.GetValue<int>()
             ?? throw new InvalidOperationException("Superset não retornou o ID da Database criada.");
-        AppendSetupLog($"[OK] Passo 1/3 — Database '{dbName}' (ID={newId}) criada com sucesso.");
+        AppendSetupLog($"[OK] Passo 1/3 — Database '{dbName}' (ID={newId}) criada com sucesso com URI '{dbUri}'.");
         return newId;
     }
 
@@ -720,9 +841,17 @@ public sealed class SupersetService : IDisposable
                     ["schema"] = "mart",
                     ["table_name"] = viewName
                 };
-                var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/dataset/", createPayload, timeoutSeconds: 90, maxRetries: 1);
-                dsId = created["id"]?.GetValue<int>()
-                    ?? throw new InvalidOperationException($"Não foi possível obter o ID do dataset {viewName}.");
+                try
+                {
+                    var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/dataset/", createPayload, timeoutSeconds: 90, maxRetries: 1);
+                    dsId = created["id"]?.GetValue<int>()
+                        ?? throw new InvalidOperationException($"Não foi possível obter o ID do dataset {viewName}.");
+                }
+                catch (Exception dsEx)
+                {
+                    AppendSetupLog($"[ERRO] Falha ao registrar dataset 'mart.{viewName}' no Superset (Database ID={dbId}): {dsEx.Message}");
+                    throw;
+                }
             }
 
             var detailJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dataset/{dsId}", null);
@@ -994,13 +1123,29 @@ public sealed class SupersetService : IDisposable
         if (existingCharts.TryGetValue(sliceName, out foundId))
         {
             chartId = foundId;
-            await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/chart/{chartId}", payload, timeoutSeconds: 90);
+            try
+            {
+                await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/chart/{chartId}", payload, timeoutSeconds: 90);
+            }
+            catch (Exception ex)
+            {
+                AppendSetupLog($"[ERRO] Falha ao atualizar gráfico '{sliceName}' (ID={chartId}): {ex.Message}");
+                throw;
+            }
         }
         else
         {
-            var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/chart/", payload, timeoutSeconds: 90);
-            chartId = created["id"]?.GetValue<int>()
-                ?? throw new InvalidOperationException($"Não foi possível obter o ID do gráfico '{sliceName}'.");
+            try
+            {
+                var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/chart/", payload, timeoutSeconds: 90);
+                chartId = created["id"]?.GetValue<int>()
+                    ?? throw new InvalidOperationException($"Não foi possível obter o ID do gráfico '{sliceName}'.");
+            }
+            catch (Exception ex)
+            {
+                AppendSetupLog($"[ERRO] Falha ao criar gráfico '{sliceName}': {ex.Message}");
+                throw;
+            }
         }
 
         var detail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null, timeoutSeconds: 60);
@@ -1921,20 +2066,9 @@ public sealed class SupersetService : IDisposable
 
     private async Task WaitForHealthyAsync(Process process, CancellationToken ct)
     {
-        const int maxTentativas = 40;
+        const int maxTentativas = 45; // 45 * 2s = 90s
         for (int i = 0; i < maxTentativas && !ct.IsCancellationRequested; i++)
         {
-            if (process.HasExited && process.ExitCode != 0)
-            {
-                lock (_stateLock)
-                {
-                    Status = SupersetStatus.Error;
-                    StatusMessage = $"WSL fechou com erro (código {process.ExitCode}). Verifique os logs.";
-                }
-                NotifyStateChanged();
-                return;
-            }
-
             if (await ProbeHealthEndpointAsync(ct))
             {
                 lock (_stateLock)
@@ -1949,7 +2083,7 @@ public sealed class SupersetService : IDisposable
 
             try
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(1500), ct);
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
             }
             catch (OperationCanceledException)
             {
@@ -1963,9 +2097,11 @@ public sealed class SupersetService : IDisposable
             {
                 if (Status == SupersetStatus.Starting)
                 {
-                    StatusMessage = "Superset ainda iniciando no WSL... clique em 'Verificar Status' em alguns segundos.";
+                    Status = SupersetStatus.Error;
+                    StatusMessage = "Superset não respondeu em /health após 90 segundos. Verifique os logs e o contêiner Docker.";
                 }
             }
+            AppendLog("[AVISO] Tempo limite de 90s excedido aguardando inicialização do Superset.");
             NotifyStateChanged();
         }
     }

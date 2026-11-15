@@ -211,9 +211,10 @@ class SupersetApiClient:
 
 
 def ensure_superset_online(base_url: str) -> None:
-    """Garante que o Apache Superset está respondendo em /health (inicia via WSL se necessário)."""
+    """Garante que o Apache Superset está respondendo em /health."""
     health_url = f"{base_url.rstrip('/')}/health"
-    for _ in range(2):
+    print(f"[INF] Aguardando Apache Superset online em {health_url}...", flush=True)
+    for _ in range(60):
         try:
             with urllib.request.urlopen(health_url, timeout=3) as resp:
                 if resp.status == 200:
@@ -221,46 +222,26 @@ def ensure_superset_online(base_url: str) -> None:
                     return
         except Exception:
             pass
-
-    # Se estivermos rodando dentro do Linux/WSL e o Superset estiver parado, tenta subi-lo
-    superset_bin = os.path.expanduser("~/superset-env/bin/superset")
-    if os.path.isfile(superset_bin):
-        print("[INFO] Superset offline na porta 8088. Iniciando servidor em background...", flush=True)
-        env = os.environ.copy()
-        env.setdefault("SUPERSET_SECRET_KEY", "movidesk_superset_super_secret_key_2026")
-        env.setdefault("FLASK_APP", "superset")
-        subprocess.Popen(
-            [superset_bin, "run", "-h", "0.0.0.0", "-p", "8088", "--with-threads"],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        for _ in range(35):
-            time.sleep(1.5)
-            try:
-                with urllib.request.urlopen(health_url, timeout=3) as resp:
-                    if resp.status == 200:
-                        print("[OK] Servidor Apache Superset iniciado com sucesso.", flush=True)
-                        return
-            except Exception:
-                pass
+        time.sleep(1.5)
 
     raise RuntimeError(
         f"Não foi possível conectar ao Apache Superset em {base_url}. "
-        "Verifique se o Superset está iniciado na porta 8088."
+        "Verifique se o contêiner Docker 'advice_movidesk_superset' está em execução na porta 8088."
     )
 
 
 def resolve_best_db_uri(preferred_uri: str) -> str:
     """
-    Testa se o IP configurado na SQLAlchemy URI (ex: 172.29.112.1:1433) responde.
-    Caso o WSL2 tenha trocado o IP do vSwitch após reinicialização, detecta automaticamente
-    o gateway padrão do WSL2, o nameserver de /etc/resolv.conf ou 127.0.0.1 na porta 1433.
+    Testa conectividade direta com o banco MovideskDM a partir do ambiente Superset.
+    Testa candidatos (preferred_host, gateway WSL default, nameserver resolv.conf, host.docker.internal, 127.0.0.1)
+    priorizando teste real com pymssql (SELECT 1).
     """
     parsed = urllib.parse.urlsplit(preferred_uri)
     preferred_host = parsed.hostname or "172.29.112.1"
     port = parsed.port or 1433
+    user = urllib.parse.unquote(parsed.username or "sa")
+    password = urllib.parse.unquote(parsed.password or "123456")
+    database = (parsed.path or "/MovideskDM").lstrip("/") or "MovideskDM"
 
     candidate_hosts: List[str] = [preferred_host]
 
@@ -287,18 +268,42 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
     except Exception:
         pass
 
-    if "127.0.0.1" not in candidate_hosts:
-        candidate_hosts.append("127.0.0.1")
+    for fallback in ["host.docker.internal", "127.0.0.1", "localhost", "172.20.48.1", "172.29.112.1"]:
+        if fallback not in candidate_hosts:
+            candidate_hosts.append(fallback)
 
+    # 1. Tentativa com pymssql (teste real de autenticação e SELECT 1)
+    try:
+        import pymssql  # type: ignore
+        for candidate in candidate_hosts:
+            try:
+                conn = pymssql.connect(
+                    server=candidate,
+                    port=port,
+                    user=user,
+                    password=password,
+                    database=database,
+                    login_timeout=3,
+                )
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                conn.close()
+                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user)}:{urllib.parse.quote(password)}@{candidate}:{port}/{urllib.parse.quote(database)}"
+                print(f"[OK] Conexão com SQL Server validada via pymssql em {candidate}:{port}.", flush=True)
+                return updated_uri
+            except Exception:
+                continue
+    except ImportError:
+        pass
+
+    # 2. Fallback via socket TCP
     for candidate in candidate_hosts:
         try:
             with socket.create_connection((candidate, port), timeout=2.0):
-                if candidate != preferred_host:
-                    updated_uri = preferred_uri.replace(f"@{preferred_host}:", f"@{candidate}:")
-                    print(f"[INFO] Host SQL Server WSL2 detectado automaticamente em {candidate}:{port}.", flush=True)
-                    return updated_uri
+                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user)}:{urllib.parse.quote(password)}@{candidate}:{port}/{urllib.parse.quote(database)}"
                 print(f"[OK] Conectividade TCP com SQL Server confirmada em {candidate}:{port}.", flush=True)
-                return preferred_uri
+                return updated_uri
         except Exception:
             continue
 
@@ -1026,6 +1031,7 @@ def upsert_database(
 
     payload: Dict[str, Any] = {
         "database_name": db_name,
+        "sqlalchemy_uri": db_uri,
         "expose_in_sqllab": True,
         "allow_ctas": False,
         "allow_cvas": False,
@@ -1034,38 +1040,19 @@ def upsert_database(
     }
 
     if existing_id is not None:
-        preserve_existing_uri = False
-        if not has_explicit_uri:
-            try:
-                detail = client.request("GET", f"/api/v1/database/{existing_id}", timeout=60)
-                existing_uri = detail.get("result", {}).get("sqlalchemy_uri", "") or ""
-                if "movideskdm" in existing_uri.lower():
-                    preserve_existing_uri = True
-            except Exception:
-                pass
-
-        if not preserve_existing_uri:
-            payload["sqlalchemy_uri"] = db_uri
-
         try:
             client.request("PUT", f"/api/v1/database/{existing_id}", payload=payload, timeout=90, max_retries=1)
-            msg = (
-                f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) validada preservando URI existente."
-                if preserve_existing_uri
-                else f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com sucesso."
-            )
-            print(msg, flush=True)
+            print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com URI '{db_uri}'.", flush=True)
         except Exception as db_put_exc:
             print(
-                f"[AVISO] Passo 1/3 — Timeout/aviso ao atualizar metadados da Database '{db_name}' (ID={existing_id}): {db_put_exc}. Prosseguindo com a conexão existente.",
+                f"[AVISO] Passo 1/3 — Aviso ao atualizar metadados da Database '{db_name}' (ID={existing_id}): {db_put_exc}. Prosseguindo.",
                 flush=True,
             )
         return existing_id
 
-    payload["sqlalchemy_uri"] = db_uri
     create_resp = client.request("POST", "/api/v1/database/", payload=payload, timeout=120, max_retries=1)
     db_id = int(create_resp["id"])
-    print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={db_id}) criada com sucesso.", flush=True)
+    print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={db_id}) criada com sucesso com URI '{db_uri}'.", flush=True)
     return db_id
 
 
@@ -1118,18 +1105,22 @@ def upsert_datasets(
                     flush=True,
                 )
         else:
-            create_resp = client.request(
-                "POST",
-                "/api/v1/dataset/",
-                payload={
-                    "database": db_id,
-                    "schema": "mart",
-                    "table_name": view_name,
-                },
-                timeout=90,
-                max_retries=1,
-            )
-            ds_id = int(create_resp["id"])
+            try:
+                create_resp = client.request(
+                    "POST",
+                    "/api/v1/dataset/",
+                    payload={
+                        "database": db_id,
+                        "schema": "mart",
+                        "table_name": view_name,
+                    },
+                    timeout=90,
+                    max_retries=1,
+                )
+                ds_id = int(create_resp["id"])
+            except Exception as ds_exc:
+                print(f"[ERRO] Falha ao registrar dataset 'mart.{view_name}' (Database ID={db_id}): {ds_exc}", flush=True)
+                raise
 
         detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
 

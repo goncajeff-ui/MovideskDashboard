@@ -625,6 +625,24 @@ public sealed class InstaladorManager
                 await _wslEngine.GarantirRegrasFirewallAsync(log, ct);
             }
 
+            log.Aguardando("Validando estabilização do Apache Superset e REST API antes de importar o Dashboard...");
+            bool supersetOnline = await _wslEngine.AguardarHealthHttpAsync(
+                "http://localhost:8088/health",
+                TimeSpan.FromSeconds(90),
+                log,
+                ct);
+
+            if (!supersetOnline)
+            {
+                throw new TimeoutException("O Apache Superset não respondeu em http://localhost:8088/health antes do deploy do Dashboard.");
+            }
+
+            await _wslEngine.AguardarHealthHttpAsync(
+                "http://localhost:8088/api/v1/security/csrf_token/",
+                TimeSpan.FromSeconds(30),
+                log,
+                ct);
+
             string setupScriptPy = _extrator.ObterRecursoTextoUtf8Lf("setup_superset_auto.py");
             string scriptPathWsl = $"{config.WslPastaSuperset}/setup_superset_auto.py";
             await _wslEngine.CopiarTextoParaWslAsync(config.WslDistro, scriptPathWsl, setupScriptPy, comoRoot: true, log, ct);
@@ -664,9 +682,12 @@ public sealed class InstaladorManager
             string sqlUser = Uri.EscapeDataString(config.SqlServerUsuario);
             string sqlPass = Uri.EscapeDataString(config.SqlServerSenha);
             string sqlDb = Uri.EscapeDataString(config.SqlServerBanco);
+            string sqlUserRaw = EscaparArgBashSimples(config.SqlServerUsuario);
+            string sqlPassRaw = EscaparArgBashSimples(config.SqlServerSenha);
+            string sqlDbRaw = EscaparArgBashSimples(config.SqlServerBanco);
             string containerName = EscaparArgBashSimples(config.NomeConteinerSuperset);
 
-            // Descobre IP do host Windows alcançável pelo WSL2/Docker quando SQL estiver local
+            // Descobre IP do host Windows alcançável pelo WSL2/Docker executando teste pymssql de dentro do contêiner
             string scriptDeploy = $$"""
                 set -e
 
@@ -681,47 +702,69 @@ public sealed class InstaladorManager
                 [ -n "$ROUTE_IP" ] && CANDIDATES+=("$ROUTE_IP")
                 NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
                 [ -n "$NS_IP" ] && CANDIDATES+=("$NS_IP")
-                CANDIDATES+=("127.0.0.1" "host.docker.internal" "172.29.112.1" "172.20.48.1")
+                CANDIDATES+=("host.docker.internal" "127.0.0.1" "localhost" "172.20.48.1" "172.29.112.1")
 
-                TARGET_HOST=""
-                for h in "${CANDIDATES[@]}"; do
-                    [ -z "$h" ] && continue
-                    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/$h/$SQL_PORT" 2>/dev/null; then
-                        TARGET_HOST="$h"
-                        echo "[OK] Conexão TCP na porta ${SQL_PORT} com sucesso no endereço: $TARGET_HOST"
-                        break
-                    fi
-                done
+                echo "[INF] Testando conectividade direta com SQL Server a partir do contêiner '{{containerName}}'..."
+
+                PROBE_CODE='
+import sys, pymssql
+
+user = sys.argv[1]
+password = sys.argv[2]
+database = sys.argv[3]
+port = int(sys.argv[4])
+candidates = sys.argv[5:]
+
+found = None
+for h in candidates:
+    if not h:
+        continue
+    try:
+        conn = pymssql.connect(server=h, port=port, user=user, password=password, database=database, login_timeout=4)
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        conn.close()
+        found = h
+        print(f"[OK_SQL_HOST]{h}")
+        break
+    except Exception as e:
+        print(f"[DEBUG_HOST] Conexao com {h}:{port} falhou: {e}", file=sys.stderr)
+
+if not found:
+    sys.exit(1)
+'
+
+                PROBE_OUT=$(docker exec '{{containerName}}' /app/.venv/bin/python -c "$PROBE_CODE" \
+                    '{{sqlUserRaw}}' \
+                    '{{sqlPassRaw}}' \
+                    '{{sqlDbRaw}}' \
+                    "$SQL_PORT" \
+                    "${CANDIDATES[@]}" 2>&1 || true)
+
+                TARGET_HOST=$(echo "$PROBE_OUT" | awk -F'\\[OK_SQL_HOST\\]' '/\\[OK_SQL_HOST\\]/ {print $2; exit}')
 
                 if [ -z "$TARGET_HOST" ]; then
+                    echo "$PROBE_OUT"
                     DEFAULT_TEST="$ROUTE_IP"
                     [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="$NS_IP"
                     [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="172.20.48.1"
-                    echo "[AVISO] Porta TCP $SQL_PORT do SQL Server não respondeu nos endereços testados (${CANDIDATES[*]})."
-                    echo "[AVISO] Endereço provável do Windows: $DEFAULT_TEST. Verifique se o serviço do SQL Server foi reiniciado após habilitar TCP/IP e se o Firewall permite conexões."
+                    echo "[AVISO] SQL Server porta $SQL_PORT ou banco '{{sqlDbRaw}}' não acessível de dentro do contêiner nos endereços testados (${CANDIDATES[*]})."
+                    echo "[AVISO] Endereço provável do Windows: $DEFAULT_TEST. Verifique se o serviço do SQL Server está ativo com TCP/IP e se o firewall permite conexões."
                     exit 42
                 fi
 
-                echo "[INF] Endereço SQL Server resolvido para o WSL2/Docker: ${TARGET_HOST}:${SQL_PORT}"
+                echo "[OK] Conexão com SQL Server validada de dentro do contêiner: ${TARGET_HOST}:${SQL_PORT} (driver pymssql)"
 
-                DB_URI="mssql+pyodbc://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
+                DB_URI="mssql+pymssql://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}"
 
-                if docker exec '{{containerName}}' test -x /app/.venv/bin/python 2>/dev/null; then
-                    docker cp '{{EscaparArgBashSimples(scriptPathWsl)}}' '{{containerName}}:/tmp/setup_superset_auto.py'
-                    docker exec '{{containerName}}' /app/.venv/bin/python /tmp/setup_superset_auto.py \
-                        --url "http://127.0.0.1:8088" \
-                        --username '{{userSuperset}}' \
-                        --password '{{passSuperset}}' \
-                        --db-name "MovideskDM" \
-                        --db-uri "$DB_URI"
-                else
-                    python3 '{{EscaparArgBashSimples(scriptPathWsl)}}' \
-                        --url "http://localhost:8088" \
-                        --username '{{userSuperset}}' \
-                        --password '{{passSuperset}}' \
-                        --db-name "MovideskDM" \
-                        --db-uri "$DB_URI"
-                fi
+                docker cp '{{EscaparArgBashSimples(scriptPathWsl)}}' '{{containerName}}:/tmp/setup_superset_auto.py'
+                docker exec '{{containerName}}' /app/.venv/bin/python /tmp/setup_superset_auto.py \
+                    --url "http://127.0.0.1:8088" \
+                    --username '{{userSuperset}}' \
+                    --password '{{passSuperset}}' \
+                    --db-name "MovideskDM" \
+                    --db-uri "$DB_URI"
                 """;
 
             ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(
