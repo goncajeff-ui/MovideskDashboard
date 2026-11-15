@@ -337,11 +337,33 @@ public sealed class InstaladorManager
                 $"Falha no pré-voo ou download da imagem Superset 6.1.0 (código {resPre.ExitCode}).\n{WslEngine.FormatarResumoErro(resPre)}");
         }
 
-        if (_wslEngine.PortaTcpEmUsoNoWindows(8088))
+        bool portaOcupada = false;
+        for (int tentativa = 0; tentativa < 4; tentativa++)
         {
-            throw new InvalidOperationException(
-                "A porta TCP 8088 já está ocupada (ou reservada pelo Windows/IIS/outro processo).\n" +
-                "Libere a porta 8088 no servidor e execute a instalação novamente.");
+            portaOcupada = _wslEngine.PortaTcpEmUsoNoWindows(8088);
+            if (!portaOcupada)
+            {
+                break;
+            }
+            await Task.Delay(1000, ct);
+        }
+
+        if (portaOcupada)
+        {
+            bool ehSupersetJaAtivo = await _wslEngine.AguardarHealthHttpAsync(
+                "http://localhost:8088/health",
+                TimeSpan.FromSeconds(2),
+                log,
+                ct);
+
+            if (!ehSupersetJaAtivo)
+            {
+                throw new InvalidOperationException(
+                    "A porta TCP 8088 já está ocupada por outro processo no Windows (ex.: IIS, outro serviço web ou proxy).\n" +
+                    "Por favor, libere a porta 8088 no servidor e execute a instalação novamente.");
+            }
+
+            log.Info("Porta 8088 já alocada para o Apache Superset no WSL2; reutilizando instância.");
         }
 
         string scriptComposeUp = $$"""

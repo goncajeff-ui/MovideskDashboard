@@ -118,28 +118,28 @@ public sealed class FrmInstalador : Form
             return;
         }
 
-        // 1) Camada atmosférica em tela cheia preservando proporção (Cover escurecido)
-        float scaleCover = Math.Max(
-            (float)ClientSize.Width / _bgImage.Width,
-            (float)ClientSize.Height / _bgImage.Height);
-        float coverW = _bgImage.Width * scaleCover;
-        float coverH = _bgImage.Height * scaleCover;
-        float coverX = (ClientSize.Width - coverW) / 2f;
-        float coverY = (ClientSize.Height - coverH) / 2f;
+        const int heroWidth = 376;
+        int rightWidth = Math.Max(0, ClientSize.Width - heroWidth);
 
-        g.DrawImage(_bgImage, new RectangleF(coverX, coverY, coverW, coverH));
-
-        using (var washBrush = new LinearGradientBrush(
-            ClientRectangle,
-            Color.FromArgb(200, 5, 16, 29),
-            Color.FromArgb(228, 6, 18, 32),
-            LinearGradientMode.Horizontal))
+        // 1) Painel direito limpo com gradiente profissional (elimina qualquer artefato/fantasma de texto na direita)
+        if (rightWidth > 0)
         {
-            g.FillRectangle(washBrush, ClientRectangle);
+            using (var rightBrush = new LinearGradientBrush(
+                new Rectangle(heroWidth, 0, rightWidth, ClientSize.Height),
+                Color.FromArgb(8, 20, 36),
+                Color.FromArgb(5, 14, 26),
+                LinearGradientMode.Vertical))
+            {
+                g.FillRectangle(rightBrush, heroWidth, 0, rightWidth, ClientSize.Height);
+            }
         }
 
-        // 2) Destaque fiel na lateral esquerda (Showcase Advice Compliance Solutions sem distorção)
-        const int heroWidth = 376;
+        if (_bgImage is null)
+        {
+            return;
+        }
+
+        // 2) Showcase fiel na lateral esquerda (Arte oficial Advice Compliance Solutions com proporção correta)
         float heroScale = (float)heroWidth / _bgImage.Width;
         float heroH = _bgImage.Height * heroScale;
         g.DrawImage(_bgImage, new RectangleF(0, 0, heroWidth, heroH));
@@ -147,8 +147,8 @@ public sealed class FrmInstalador : Form
         // Suaviza borda direita e inferior do Showcase para fundir perfeitamente aos cards
         using (var rightFeather = new LinearGradientBrush(
             new Rectangle(heroWidth - 70, 0, 72, ClientSize.Height),
-            Color.FromArgb(0, 6, 18, 32),
-            Color.FromArgb(245, 6, 18, 32),
+            Color.FromArgb(0, 8, 20, 36),
+            Color.FromArgb(255, 8, 20, 36),
             LinearGradientMode.Horizontal))
         {
             g.FillRectangle(rightFeather, heroWidth - 70, 0, 72, ClientSize.Height);
@@ -157,13 +157,13 @@ public sealed class FrmInstalador : Form
         using (var bottomFeather = new LinearGradientBrush(
             new Rectangle(0, 175, heroWidth, 120),
             Color.FromArgb(15, 6, 18, 32),
-            Color.FromArgb(235, 6, 18, 32),
+            Color.FromArgb(245, 6, 18, 32),
             LinearGradientMode.Vertical))
         {
             g.FillRectangle(bottomFeather, 0, 175, heroWidth, 120);
         }
 
-        using (var bottomSolid = new SolidBrush(Color.FromArgb(235, 6, 18, 32)))
+        using (var bottomSolid = new SolidBrush(Color.FromArgb(245, 6, 18, 32)))
         {
             if (ClientSize.Height > 295)
             {
@@ -419,7 +419,7 @@ public sealed class FrmInstalador : Form
         };
         rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));   // Cabeçalho
-        rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 234));  // Inputs Config
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 240));  // Inputs Config
         rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Progresso + Console Log
         rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));   // Barra de botões
 
@@ -599,38 +599,45 @@ public sealed class FrmInstalador : Form
         sqlRow.Controls.Add(_txtSupersetSenha, 4, 1);
         cfgGrid.Controls.Add(sqlRow, 0, 3);
 
-        // Linha D: Opções de implantação
-        var opcoesFlow = new FlowLayoutPanel
+        // Linha D: Opções de implantação (Grid com 2 colunas proporcionais para evitar truncamento de texto)
+        var opcoesGrid = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             BackColor = Color.Transparent,
-            Padding = new Padding(0, 4, 0, 0)
+            Margin = new Padding(0, 4, 0, 0),
+            Padding = Padding.Empty
         };
+        opcoesGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+        opcoesGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        opcoesGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _chkAtalhoDesktop = new CheckBox
         {
-            Text = "Criar atalho 'Painel Movidesk BI' na Área de Trabalho (ícone Advice)",
+            Text = "Criar atalho na Área de Trabalho (Painel Movidesk BI)",
             Checked = true,
-            AutoSize = true,
-            ForeColor = CorTextoSecundario,
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-            Margin = new Padding(0, 0, 18, 0)
+            Dock = DockStyle.Fill,
+            AutoEllipsis = false,
+            ForeColor = CorTextoClaro,
+            Font = new Font("Segoe UI", 8.8f, FontStyle.Regular),
+            Margin = new Padding(0, 0, 8, 0)
         };
 
         _chkFirewall = new CheckBox
         {
-            Text = "Liberar portas 1433 e 8088 no Firewall",
+            Text = "Liberar portas no Firewall (TCP 1433 e 8088)",
             Checked = true,
-            AutoSize = true,
-            ForeColor = CorTextoSecundario,
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
+            Dock = DockStyle.Fill,
+            AutoEllipsis = false,
+            ForeColor = CorTextoClaro,
+            Font = new Font("Segoe UI", 8.8f, FontStyle.Regular),
+            Margin = new Padding(4, 0, 0, 0)
         };
 
-        opcoesFlow.Controls.Add(_chkAtalhoDesktop);
-        opcoesFlow.Controls.Add(_chkFirewall);
-        cfgGrid.Controls.Add(opcoesFlow, 0, 4);
+        opcoesGrid.Controls.Add(_chkAtalhoDesktop, 0, 0);
+        opcoesGrid.Controls.Add(_chkFirewall, 1, 0);
+        cfgGrid.Controls.Add(opcoesGrid, 0, 4);
 
         cardConfig.Controls.Add(cfgGrid);
         rightLayout.Controls.Add(cardConfig, 0, 1);
@@ -1167,8 +1174,11 @@ public sealed class FrmInstalador : Form
         _txtSqlUsuario.Enabled = !emExecucao;
         _txtSqlSenha.Enabled = !emExecucao;
         _txtSupersetSenha.Enabled = !emExecucao;
-        _chkAtalhoDesktop.Enabled = !emExecucao;
-        _chkFirewall.Enabled = !emExecucao;
+
+        // Mantém Enabled = true para não esmaecer ou ocultar o checkmark no tema escuro,
+        // mas trava o AutoCheck para que o usuário não altere o estado durante a instalação.
+        _chkAtalhoDesktop.AutoCheck = !emExecucao;
+        _chkFirewall.AutoCheck = !emExecucao;
 
         _btnInstalar.Enabled = !emExecucao;
         _btnInstalar.Text = emExecucao ? "Instalando..." : "Iniciar Instalação";

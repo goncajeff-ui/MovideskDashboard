@@ -104,6 +104,7 @@ public sealed class WslEngine
         AuditorLog log,
         bool registrarLinhasNoLog = true,
         TimeSpan? timeout = null,
+        byte[]? dadosStdin = null,
         CancellationToken ct = default)
     {
         var startInfo = new ProcessStartInfo
@@ -113,6 +114,7 @@ public sealed class WslEngine
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = dadosStdin is not null,
             StandardOutputEncoding = outputEncoding,
             StandardErrorEncoding = outputEncoding
         };
@@ -168,6 +170,19 @@ public sealed class WslEngine
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+
+        if (dadosStdin is not null)
+        {
+            try
+            {
+                await process.StandardInput.BaseStream.WriteAsync(dadosStdin, ct);
+                await process.StandardInput.BaseStream.FlushAsync(ct);
+            }
+            finally
+            {
+                process.StandardInput.Close();
+            }
+        }
 
         using var timeoutCts = timeout.HasValue
             ? new CancellationTokenSource(timeout.Value)
@@ -228,7 +243,8 @@ public sealed class WslEngine
             log,
             registrarLinhasNoLog,
             timeout ?? TimeSpan.FromMinutes(10),
-            ct);
+            dadosStdin: null,
+            ct: ct);
     }
 
     public Task<ResultadoComando> ExecutarBashWslAsync(
@@ -241,8 +257,7 @@ public sealed class WslEngine
         CancellationToken ct = default)
     {
         string normalized = scriptBash.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
-        string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(normalized));
-        string bashPipeline = $"echo '{b64}' | base64 -d | bash -e -o pipefail";
+        byte[] scriptBytes = Encoding.UTF8.GetBytes(normalized);
 
         var args = new List<string>();
         if (!string.IsNullOrWhiteSpace(distro))
@@ -259,8 +274,8 @@ public sealed class WslEngine
 
         args.Add("-e");
         args.Add("bash");
-        args.Add("-lc");
-        args.Add(bashPipeline);
+        args.Add("-l");
+        args.Add("-s");
 
         return ExecutarProcessoAsync(
             ResolverCaminhoWsl(),
@@ -269,7 +284,8 @@ public sealed class WslEngine
             log,
             registrarLinhasNoLog,
             timeout ?? TimeSpan.FromMinutes(15),
-            ct);
+            dadosStdin: scriptBytes,
+            ct: ct);
     }
 
     public async Task CopiarTextoParaWslAsync(
@@ -281,24 +297,36 @@ public sealed class WslEngine
         CancellationToken ct = default)
     {
         string lfText = conteudoTexto.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
-        string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(lfText));
-        string pastaPai = caminhoDestinoWsl.Contains('/')
-            ? caminhoDestinoWsl[..caminhoDestinoWsl.LastIndexOf('/')]
-            : ".";
+        byte[] bytes = Encoding.UTF8.GetBytes(lfText);
 
-        string script = $"""
-            mkdir -p "{pastaPai}"
-            printf '%s' '{b64}' | base64 -d > "{caminhoDestinoWsl}"
-            chmod 644 "{caminhoDestinoWsl}"
-            """;
+        var args = new List<string>();
+        if (!string.IsNullOrWhiteSpace(distro))
+        {
+            args.Add("-d");
+            args.Add(distro);
+        }
 
-        ResultadoComando res = await ExecutarBashWslAsync(
-            distro,
-            script,
-            comoRoot,
+        if (comoRoot)
+        {
+            args.Add("-u");
+            args.Add("root");
+        }
+
+        args.Add("-e");
+        args.Add("bash");
+        args.Add("-c");
+        args.Add("mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\" && chmod 644 \"$1\"");
+        args.Add("bash");
+        args.Add(caminhoDestinoWsl);
+
+        ResultadoComando res = await ExecutarProcessoAsync(
+            ResolverCaminhoWsl(),
+            args,
+            Encoding.UTF8,
             log,
             registrarLinhasNoLog: false,
-            timeout: TimeSpan.FromSeconds(30),
+            timeout: TimeSpan.FromMinutes(2),
+            dadosStdin: bytes,
             ct: ct);
 
         if (!res.Sucesso)
