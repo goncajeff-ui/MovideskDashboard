@@ -850,13 +850,13 @@ def build_manual_1_html() -> str:
     # -------------------------------------------------------------------------
     p1 = f"""
     <div class="cover-banner">
-        <span class="cover-tag">Documentação Oficial de Operação · Release v1.0.5</span>
+        <span class="cover-tag">Documentação Oficial de Operação · Plataforma Movidesk BI</span>
         <h1>{manual_title}</h1>
-        <p>Guia corporativo de operação da plataforma de orquestração BI do Movidesk: inicialização silenciosa do Apache Superset no WSL2, monitoramento em tempo real do Data Mart SQL Server (MovideskDM) e motor assíncrono de ingestão Anti-Travamento.</p>
+        <p>Guia corporativo de operação da plataforma de orquestração BI da Advice: inicialização silenciosa do Apache Superset no WSL2, provisionamento automático nativo em C# do Dashboard - Movidesk BI, monitoramento em tempo real do SQL Server (MovideskDM) e motor assíncrono de ingestão Anti-Travamento.</p>
         <div class="cover-meta-strip">
             <span><strong>Unidade:</strong> Inteligência Operacional &amp; Suporte</span>
             <span><strong>Aplicação:</strong> MovideskControlPanel.exe (.NET 8)</span>
-            <span><strong>Banco:</strong> MSSQL (MovideskDM)</span>
+            <span><strong>Banco:</strong> MSSQL (MovideskDM · 9 Views)</span>
         </div>
     </div>
 
@@ -876,8 +876,8 @@ def build_manual_1_html() -> str:
         <div class="highlight-card">
             <div class="highlight-num">02</div>
             <div class="highlight-content">
-                <h3>Launcher Silencioso do Superset</h3>
-                <p>Acionamento automático do Apache Superset 6.1.0 no WSL2 (Ubuntu) via <code>System.Diagnostics.Process</code> sem janelas de terminal e com verificação contínua de saúde.</p>
+                <h3>Launcher &amp; Setup Automático Superset</h3>
+                <p>Acionamento silencioso do Apache Superset 6.1.0 no WSL2 e provisionamento <strong>nativo em C# via REST API</strong> (<code>MovideskDM</code>, 9 Datasets, 15 gráficos e filtros globais).</p>
             </div>
         </div>
         <div class="highlight-card">
@@ -891,7 +891,7 @@ def build_manual_1_html() -> str:
             <div class="highlight-num">04</div>
             <div class="highlight-content">
                 <h3>Orquestrador Anti-Travamento</h3>
-                <p>Cargas Histórica e Incremental estritamente assíncronas (<code>Task.Run</code>) com suporte a <code>Skip</code>/Cursor inteligente, sincronização de Empresas (<code>/persons</code>) e console vivo.</p>
+                <p>Cargas Histórica e Incremental estritamente assíncronas (<code>Task.Run</code>) com Cursor inteligente UTC, sincronização de Empresas (<code>/persons</code>) e preservação de views.</p>
             </div>
         </div>
     </div>
@@ -914,8 +914,8 @@ def build_manual_1_html() -> str:
             <li class="toc-item">
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 02</span>
-                    <span class="toc-title">Launcher do Superset</span>
-                    <span class="toc-desc">— Como iniciar o Superset no WSL2 em background e monitorar o status na porta 8088</span>
+                    <span class="toc-title">Launcher &amp; Setup Superset</span>
+                    <span class="toc-desc">— Como iniciar o Superset no WSL2, provisionar em C# nativo e acessar na porta 8088</span>
                 </div>
                 <span class="toc-page">Página 03</span>
             </li>
@@ -959,19 +959,19 @@ def build_manual_1_html() -> str:
         <div class="step-row">
             <div class="step-circle">1</div>
             <div class="step-text">
-                <strong>Camada de Apresentação Reativa (Blazor Server / Hybrid):</strong> Renderiza os três módulos operacionais em tempo real. A thread de interface (UI Thread) nunca executa loops de rede ou banco diretamente; ela apenas escuta eventos de estado (<code>OnStateChanged</code>) emitidos pelos serviços em segundo plano.
+                <strong>Camada de Apresentação Reativa (Blazor Server / Hybrid):</strong> Renderiza os cards operacionais e a automação REST API do Superset em tempo real. A thread de interface (UI Thread) nunca executa loops de rede ou banco diretamente; ela escuta eventos de estado (<code>OnStateChanged</code>) emitidos pelos serviços em segundo plano.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>Motor Extrator C# Assíncrono (<code>MovideskIngestionService</code>):</strong> Opera estritamente dentro de <code>Task.Run</code> com <code>async/await</code> e <code>CancellationTokenSource</code>. Consome as APIs REST do Movidesk (<code>/tickets</code>, <code>/tickets/past</code> e <code>/persons</code>), respeita automaticamente a janela de Rate Limit (10 req/min em horário comercial) e atualiza sozinho as Procedures e Views do banco na inicialização.
+                <strong>Motor Extrator C# Assíncrono (<code>MovideskIngestionService</code>):</strong> Opera estritamente dentro de <code>Task.Run</code> com <code>async/await</code> e <code>CancellationTokenSource</code>. Consome as APIs REST do Movidesk (<code>/tickets</code>, <code>/tickets/past</code> e <code>/persons</code>), respeita o Rate Limit (10 req/min em horário comercial) e valida as Procedures e Views preservando customizações manuais.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Data Mart Local em Microsoft SQL Server (<code>MovideskDM</code>):</strong> Estrutura os dados em 5 schemas especializados (<code>raw</code>, <code>core</code>, <code>mart</code>, <code>ctl</code> e <code>sec</code>), convertendo todos os horários UTC da API para <strong>Horário Oficial de Brasília (BRT)</strong> e servindo 8 Views analíticas prontas para o Apache Superset.
+                <strong>Data Mart Local em Microsoft SQL Server (<code>MovideskDM</code>):</strong> Estrutura os dados em 5 schemas especializados (<code>raw</code>, <code>core</code>, <code>mart</code>, <code>ctl</code> e <code>sec</code>), convertendo todos os horários UTC da API para <strong>Horário Oficial de Brasília (BRT)</strong> e servindo <strong>9 Views analíticas</strong> aceleradas por índices <em>covering</em> para o Apache Superset.
             </div>
         </div>
     </div>
@@ -988,7 +988,7 @@ def build_manual_1_html() -> str:
             <tr>
                 <td><span class="badge-pill badge-teal">Host Desktop</span></td>
                 <td><code>MovideskControlPanel.exe</code></td>
-                <td>Aplicação .NET 8 (WinForms + Blazor WebView2) standalone. Lê configurações em <code>appsettings.json</code>.</td>
+                <td>Aplicação .NET 8 (WinForms + Blazor WebView2) standalone com setup nativo Superset em C# via <code>HttpClient</code>.</td>
             </tr>
             <tr>
                 <td><span class="badge-pill badge-gold">Camada RAW</span></td>
@@ -1002,8 +1002,8 @@ def build_manual_1_html() -> str:
             </tr>
             <tr>
                 <td><span class="badge-pill badge-gold">Camada MART</span></td>
-                <td><code>mart.vw_*</code> (8 Views)</td>
-                <td>Camada semântica de indicadores (SLA, Backlog, Aging, Throughput e Raio-X de Clientes) lida pelo Superset.</td>
+                <td><code>mart.vw_*</code> (9 Views)</td>
+                <td>Camada semântica de indicadores (SLA, Backlog, Aging, Throughput, Raio-X Dono Atual e Clientes por Período).</td>
             </tr>
             <tr>
                 <td><span class="badge-pill badge-teal">Camada CTL / SEC</span></td>
@@ -1016,7 +1016,7 @@ def build_manual_1_html() -> str:
     <div class="screenshot-placeholder-box">
         <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot da tela 01 - Visão Geral do Painel de Controle Movidesk BI]</div>
         {f'<div class="screenshot-img-wrapper"><img src="{img_01}" alt="Tela 01 - Visão Geral do Painel de Controle" /></div>' if img_01 else ''}
-        <div class="screenshot-caption">Figura 1.1 — Tela principal do MovideskControlPanel.exe exibindo os 3 módulos integrados em execução.</div>
+        <div class="screenshot-caption">Figura 1.1 — Tela principal do MovideskControlPanel.exe exibindo os módulos operacionais em execução.</div>
     </div>
     """
 
@@ -1027,13 +1027,13 @@ def build_manual_1_html() -> str:
     <div class="chapter-header">
         <span class="chapter-badge">Capítulo 02</span>
         <div class="chapter-title-block">
-            <h2>Launcher do Apache Superset (WSL2 em Background)</h2>
-            <span>Acionamento Silencioso via System.Diagnostics.Process e Monitoramento de Saúde na Porta 8088</span>
+            <h2>Launcher &amp; Setup Automático do Apache Superset</h2>
+            <span>Acionamento Silencioso via WSL2 e Provisionamento REST API Nativo em C# (Porta 8088)</span>
         </div>
     </div>
 
     <p class="lead-text">
-        O módulo <strong>1. Launcher do Apache Superset</strong> encapsula toda a complexidade do subsistema Linux (WSL2 Ubuntu) no Windows. Por meio da classe <code>SupersetService</code>, o painel utiliza <code>System.Diagnostics.Process</code> com as flags <code>CreateNoWindow = true</code> e <code>UseShellExecute = false</code> para ativar o ambiente virtual Python (<code>~/superset-env/bin/activate</code>) e levantar o Gunicorn/Superset na porta <code>8088</code> sem abrir nenhuma janela preta de terminal na área de trabalho do operador.
+        Além de subir e monitorar o Apache Superset no WSL2 (Ubuntu) via <code>System.Diagnostics.Process</code> com <code>CreateNoWindow = true</code>, a classe <code>SupersetService</code> conta com o card <strong>Configuração Inicial do Superset</strong>: um motor <strong>100% nativo em C# (<code>HttpClient</code>)</strong> que cria a conexão <code>MovideskDM</code>, registra as 9 Views <code>mart</code> e publica automaticamente o <strong>Dashboard - Movidesk BI</strong> (15 gráficos e filtros globais) sem precisar abrir terminal.
     </p>
 
     <div class="steps-container">
@@ -1052,7 +1052,7 @@ def build_manual_1_html() -> str:
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Acesso Rápido e Diagnóstico ("Abrir Superset ↗" e "Verificar Status"):</strong> Quando o servidor está <em>Online</em>, o botão verde <strong>"Abrir Superset ↗"</strong> aparece automaticamente para abrir o navegador padrão direto nos dashboards. O console inferior registra todos os eventos de inicialização com carimbo de hora.
+                <strong>Acesso Rápido e Setup 1-Clique ("Executar Setup Automático" e "Abrir Dashboard Movidesk ↗"):</strong> Com o servidor <em>Online</em>, informe a senha do <code>admin</code> e clique em <strong>Executar Setup Automático</strong> para criar ou atualizar os 9 Datasets, 15 gráficos e os filtros nativos (<code>Equipe</code>, <code>Serviço</code> e <code>Período</code>), acessando direto <code>/superset/dashboard/dashboard-movidesk/</code>.
             </div>
         </div>
         <div class="step-row">
@@ -1078,14 +1078,14 @@ def build_manual_1_html() -> str:
                 <td>Dispara o comando bash no WSL2 em background e inicia o polling HTTP até a porta <code>8088</code> responder.</td>
             </tr>
             <tr>
-                <td><strong>Abrir Superset ↗</strong></td>
-                <td><span class="badge-pill badge-green">Online</span></td>
-                <td>Exibido somente quando o endpoint <code>/health</code> confirma disponibilidade. Abre <code>http://localhost:8088</code>.</td>
+                <td><strong>Executar Setup Automático</strong></td>
+                <td><span class="badge-pill badge-green">Concluído</span></td>
+                <td>Executa em C# nativo a REST API do Superset para criar <code>MovideskDM</code>, 9 Datasets, 15 Gráficos e 3 Filtros Nativos.</td>
             </tr>
             <tr>
-                <td><strong>Verificar Status</strong></td>
-                <td>Consulta Imediata</td>
-                <td>Executa um teste instantâneo de conectividade na porta configurada em <code>Superset:Port</code> no <code>appsettings.json</code>.</td>
+                <td><strong>Abrir Dashboard Movidesk ↗</strong></td>
+                <td><span class="badge-pill badge-green">Online</span></td>
+                <td>Abre o navegador diretamente em <code>http://localhost:8088/superset/dashboard/dashboard-movidesk/</code>.</td>
             </tr>
             <tr>
                 <td><strong>Parar Superset</strong></td>
@@ -1128,7 +1128,7 @@ def build_manual_1_html() -> str:
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>RAW Total vs. Empresas / Contatos Vinculados:</strong> O minicard esquerdo exibe o total bruto em <code>raw.Ticket</code>, enquanto o minicard direito audita a separação entre <strong>Empresas Clientes</strong> (<code>TipoPessoa = 2</code>) e <strong>Contatos Vinculados</strong> (pessoas físicas associadas às suas respectivas organizações em <code>core.Dim_Cliente</code>).
+                <strong>RAW Total vs. Empresas / Contatos Vinculados:</strong> O minicard esquerdo exibe o total bruto em <code>raw.Ticket</code>, enquanto o minicard direito audita a separação entre <strong>Empresas Clientes</strong> (<code>TipoPessoa IN (2, 4)</code>) e <strong>Contatos Vinculados</strong> (pessoas físicas associadas às suas respectivas organizações em <code>core.Dim_Cliente</code>).
             </div>
         </div>
         <div class="step-row">
@@ -1151,7 +1151,7 @@ def build_manual_1_html() -> str:
             <tr>
                 <td><strong>Chamados no Data Mart</strong></td>
                 <td><code>SELECT COUNT(*) FROM core.Fato_Ticket</code></td>
-                <td>Confirma o volume total de tickets disponíveis nas 8 Views analíticas (<code>mart.vw_*</code>).</td>
+                <td>Confirma o volume total de tickets disponíveis nas 9 Views analíticas (<code>mart.vw_*</code>).</td>
             </tr>
             <tr>
                 <td><strong>RAW Total</strong></td>
@@ -1161,7 +1161,7 @@ def build_manual_1_html() -> str:
             <tr>
                 <td><strong>Empresas / Contatos</strong></td>
                 <td><code>COUNT(*) FROM core.Dim_Cliente</code></td>
-                <td>Garante que a visão de Churn e Saúde de Clientes (<code>vw_ClienteRaioX</code>) agrupe por Empresa real.</td>
+                <td>Garante que as visões de Churn e Saúde de Clientes (<code>vw_ClienteRaioX</code> e <code>vw_TicketsPorClientePeriodo</code>) agrupem por Empresa real.</td>
             </tr>
             <tr>
                 <td><strong>Faixa de Tickets (#ID)</strong></td>
@@ -1288,10 +1288,10 @@ def build_manual_2_html() -> str:
     <div class="cover-banner">
         <span class="cover-tag">Guia Passo a Passo ("Mastigado") · Engenharia de BI &amp; Analytics</span>
         <h1>{manual_title}</h1>
-        <p>Manual técnico e operacional completo para conectar o Microsoft SQL Server (MovideskDM) ao Apache Superset 6.1.0, mapear as 8 Views analíticas como Datasets, construir os gráficos da Sala de Guerra, configurar acessos somente leitura (Role Gamma) para a Diretoria e publicar link HTTPS seguro via Ngrok.</p>
+        <p>Manual técnico e operacional completo para conectar o Microsoft SQL Server (MovideskDM) ao Apache Superset 6.1.0, provisionar automaticamente (ou manualmente) as 9 Views analíticas e os 15 gráficos do Dashboard - Movidesk BI, configurar acessos somente leitura (Role Gamma) para a Diretoria e publicar link HTTPS seguro via Ngrok.</p>
         <div class="cover-meta-strip">
             <span><strong>Plataforma:</strong> Apache Superset 6.1.0 (WSL2)</span>
-            <span><strong>Fonte de Dados:</strong> SQL Server (MovideskDM)</span>
+            <span><strong>Fonte de Dados:</strong> SQL Server (MovideskDM · 9 Views)</span>
             <span><strong>Porta Padrão:</strong> 8088 (HTTP / Ngrok HTTPS)</span>
         </div>
     </div>
@@ -1305,22 +1305,22 @@ def build_manual_2_html() -> str:
         <div class="highlight-card">
             <div class="highlight-num">01</div>
             <div class="highlight-content">
-                <h3>Conexão Direta ao MSSQL (MovideskDM)</h3>
-                <p>Configuração passo a passo da string SQLAlchemy (<code>mssql+pymssql://</code>) conectando o Superset no WSL2 ao SQL Server local no Windows.</p>
+                <h3>Setup Automático ou Manual (MovideskDM)</h3>
+                <p>Provisionamento em 1 clique via Painel (<code>HttpClient</code> nativo C#) ou configuração manual da string SQLAlchemy (<code>mssql+pymssql://</code>) no Superset.</p>
             </div>
         </div>
         <div class="highlight-card">
             <div class="highlight-num">02</div>
             <div class="highlight-content">
-                <h3>Catálogo de 8 Views Analíticas (Schema mart)</h3>
-                <p>Exposição das Views pré-calculadas em Horário de Brasília (<code>mart.vw_*</code>) como Datasets oficiais prontos para uso sem escrever código SQL.</p>
+                <h3>Catálogo de 9 Views Analíticas (Schema mart)</h3>
+                <p>Exposição das Views pré-calculadas em Horário de Brasília (<code>mart.vw_*</code>) como Datasets oficiais com filtros nativos (<code>Equipe</code>, <code>Serviço</code> e <code>Período</code>).</p>
             </div>
         </div>
         <div class="highlight-card">
             <div class="highlight-num">03</div>
             <div class="highlight-content">
-                <h3>Sala de Guerra e Gráficos Big Number</h3>
-                <p>Roteiro clique a clique para construir cartões executivos arrastando métricas (<code>SUM</code>, <code>AVG</code>) e montar o painel operacional e tático.</p>
+                <h3>Dashboard - Movidesk BI (15 Componentes)</h3>
+                <p>Roteiro clique a clique para Big Numbers, Radar SLA, Evolução <code>echarts_area</code>, Raio-X por Dono Atual e Donut/Grid de Clientes no Período.</p>
             </div>
         </div>
         <div class="highlight-card">
@@ -1343,7 +1343,7 @@ def build_manual_2_html() -> str:
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 01</span>
                     <span class="toc-title">Conectando o Banco de Dados</span>
-                    <span class="toc-desc">— Passo a passo para plugar o banco MSSQL MovideskDM no Apache Superset</span>
+                    <span class="toc-desc">— Setup Automático 1-clique ou plug manual do banco MSSQL MovideskDM no Superset</span>
                 </div>
                 <span class="toc-page">Página 02</span>
             </li>
@@ -1351,15 +1351,15 @@ def build_manual_2_html() -> str:
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 02</span>
                     <span class="toc-title">Mapeamento de Datasets</span>
-                    <span class="toc-desc">— Como expor as 8 Views do schema mart do SQL Server como Datasets no Superset</span>
+                    <span class="toc-desc">— As 9 Views do schema mart do SQL Server registradas como Datasets no Superset</span>
                 </div>
                 <span class="toc-page">Página 03</span>
             </li>
             <li class="toc-item">
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 03</span>
-                    <span class="toc-title">Criação de Gráficos (Sala de Guerra)</span>
-                    <span class="toc-desc">— Passo a passo mastigado para criar gráficos "Big Number" e tabela de receitas</span>
+                    <span class="toc-title">Criação de Gráficos (Dashboard - Movidesk BI)</span>
+                    <span class="toc-desc">— Guia prático de Big Numbers, gráficos de área/tabela e filtros globais</span>
                 </div>
                 <span class="toc-page">Página 04</span>
             </li>
@@ -1391,12 +1391,12 @@ def build_manual_2_html() -> str:
         <span class="chapter-badge">Capítulo 01</span>
         <div class="chapter-title-block">
             <h2>Conectando o Banco de Dados (MSSQL MovideskDM)</h2>
-            <span>Passo a Passo Mastigado para Plugar o Microsoft SQL Server no Apache Superset</span>
+            <span>Setup Automático via Painel de Controle ou Configuração Manual no Apache Superset</span>
         </div>
     </div>
 
     <p class="lead-text">
-        Com o Apache Superset iniciado pelo Painel de Controle (<span class="badge-pill badge-green">Online</span> na porta <code>8088</code>), o primeiro passo é cadastrar a conexão com o banco de dados <strong>MovideskDM</strong> que roda no seu SQL Server local. Siga exatamente o roteiro abaixo:
+        Com o Apache Superset iniciado pelo Painel de Controle (<span class="badge-pill badge-green">Online</span> na porta <code>8088</code>), você pode usar o card <strong>Configuração Inicial do Superset</strong> (botão <strong>Executar Setup Automático</strong>) para criar tudo em segundos — ou seguir o roteiro manual abaixo para plugar o banco <strong>MovideskDM</strong> pela interface web:
     </p>
 
     <div class="steps-container">
@@ -1492,13 +1492,13 @@ def build_manual_2_html() -> str:
     <div class="chapter-header">
         <span class="chapter-badge">Capítulo 02</span>
         <div class="chapter-title-block">
-            <h2>Mapeamento de Datasets (Expondo as Views do Schema mart)</h2>
-            <span>Como Transformar as 8 Views Analíticas do SQL Server em Fontes de Dados para os Gráficos</span>
+            <h2>Mapeamento de Datasets (As 9 Views do Schema mart)</h2>
+            <span>Como Transformar as 9 Views Analíticas do SQL Server em Fontes de Dados para os Gráficos</span>
         </div>
     </div>
 
     <p class="lead-text">
-        No Apache Superset, os gráficos não leem tabelas diretamente: eles consomem <strong>Datasets</strong>. Toda a inteligência de negócio da Advice (cálculo de SLA, conversão para Horário de Brasília, faixas de Aging e vínculo de Empresas) já está pronta dentro do schema <strong><code>mart</code></strong> no banco <code>MovideskDM</code>. Basta registrar cada uma das 8 Views seguindo o passo a passo abaixo:
+        No Apache Superset, os gráficos consomem <strong>Datasets</strong>. Toda a inteligência de negócio da Advice (SLA, Horário de Brasília, Aging, Dono Atual por Produto e Clientes no Período) já vem pronta dentro do schema <strong><code>mart</code></strong> no banco <code>MovideskDM</code> (ou é registrada automaticamente pelo Setup do Painel):
     </p>
 
     <div class="steps-container">
@@ -1511,25 +1511,22 @@ def build_manual_2_html() -> str:
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>Selecionar Banco, Schema e View:</strong> Na lateral esquerda, preencha os 3 seletores na ordem:
-                <br/>• Em <strong>DATABASE</strong>: selecione <code>MovideskDM</code>.
-                <br/>• Em <strong>SCHEMA</strong>: selecione <strong><code>mart</code></strong> (muito importante: não use <code>raw</code> nem <code>core</code> nos gráficos).
-                <br/>• Em <strong>TABLE</strong>: escolha a View desejada (comece por <code>vw_VisaoGeralKpis</code>).
+                <strong>Selecionar Banco, Schema e View:</strong> Preencha: <strong>DATABASE</strong> = <code>MovideskDM</code>, <strong>SCHEMA</strong> = <code>mart</code> (nunca use <code>raw</code>/<code>core</code> nos gráficos) e <strong>TABLE</strong> = View desejada.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Salvar o Dataset:</strong> Clique no botão inferior direito <strong><code>Create Dataset and Create Chart</code></strong> (ou apenas <em>Create Dataset</em>). Repita o processo para as 8 Views listadas na tabela abaixo — leva menos de 2 minutos para cadastrar todas!
+                <strong>Salvar o Dataset:</strong> Clique em <strong><code>Create Dataset</code></strong> para cada uma das <strong>9 Views</strong> abaixo (ou utilize o botão <em>Executar Setup Automático</em> do Painel para registrar e sincronizar colunas em 1 clique).
             </div>
         </div>
     </div>
 
-    <table class="zebra-table">
+    <table class="zebra-table compact">
         <thead>
             <tr>
-                <th style="width: 28%;">View no Schema mart</th>
-                <th style="width: 20%;">Coluna de Tempo</th>
+                <th style="width: 30%;">View no Schema mart</th>
+                <th style="width: 17%;">Coluna de Tempo</th>
                 <th>O que esta View entrega pronta para o Dashboard</th>
             </tr>
         </thead>
@@ -1537,54 +1534,59 @@ def build_manual_2_html() -> str:
             <tr>
                 <td><code>mart.vw_VisaoGeralKpis</code></td>
                 <td><em>Snapshot Atual</em></td>
-                <td>Big Numbers por Equipe: <code>BacklogAtual</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>SlaPausados</code>, <code>EmDependenciaDev</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code> e <code>FcrUltimos30DiasPct</code>.</td>
+                <td>Big Numbers por Equipe: <code>BacklogAtual</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code> e <code>FcrUltimos30DiasPct</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_SlaRadar</code></td>
                 <td><code>DataCriacao</code></td>
-                <td>Fila aberta classificada por risco de SLA (<code>Vencido</code>, <code>Crítico &lt; 2h</code>, <code>Alerta &lt; 4h</code>) com nome da Empresa, Analista e <code>MinutosParaVencer</code>.</td>
+                <td>Fila aberta ordenada por gravidade (<code>Vencido</code>, <code>Crítico &lt; 2h</code>, <code>Alerta &lt; 4h</code>) com Empresa, Serviço, Equipe e <code>MinutosParaVencer</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_BacklogEvolucao</code></td>
                 <td><code>DataSnapshot</code></td>
-                <td>Curva histórica diária (últimos 90 dias + hoje) de <code>QtdTickets</code>, <code>QtdSlaVencido</code> e <code>QtdNoPrazo</code> por Equipe, Analista e Status.</td>
+                <td>Curva histórica diária (90 dias + hoje) de <code>QtdTickets</code>, <code>QtdSlaVencido</code> e <code>QtdNoPrazo</code> por Equipe, Analista e Status.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_BacklogAging</code></td>
                 <td><code>DataCriacao</code></td>
-                <td>Idade dos chamados em aberto (<code>FaixaIdade</code>: 0 a 2d até &gt; 30d) e flag <code>SemInteracaoMais48h</code>.</td>
+                <td>Idade dos chamados em aberto (<code>FaixaIdade</code>: 0–2d até &gt; 30d), Serviço, Equipe e alerta <code>SemInteracaoMais48h</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_StatusAging</code></td>
                 <td><em>Agregado</em></td>
-                <td>Gargalos operacionais: tempo médio e total (em horas úteis e corridas) gasto em cada Status.</td>
+                <td>Gargalos operacionais por Equipe e Status em horas úteis médias e horas corridas médias/totais.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_ThroughputDiario</code></td>
                 <td><code>Data</code></td>
-                <td>Balanço diário de <code>Abertos</code> vs. <code>Resolvidos</code> e <code>SaldoLiquido</code> acoplado ao calendário de dias úteis.</td>
+                <td>Balanço diário por Equipe de <code>Abertos</code> vs. <code>Resolvidos</code> e <code>SaldoLiquido</code> sobre a <code>Dim_Calendario</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_ClienteRaioX</code></td>
                 <td><code>DataUltimoTicket</code></td>
-                <td>Saúde por <strong>Empresa Cliente</strong>: volume histórico, abertos, % SLA cumprido e alerta de <strong>Risco Churn (Silencioso &gt; 60d)</strong>.</td>
+                <td>Saúde por <strong>Empresa + Serviço + Equipe (Dono Atual)</strong> com <em>single-pass</em> rápido: % SLA e <strong>Risco Churn (&gt; 60d)</strong>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_MapaDemanda</code></td>
                 <td><em>Agregado</em></td>
-                <td>Pareto de Categorias, Urgência e Versão do Produto/Release (<code>CampoId = 133948</code>).</td>
+                <td>Pareto por Equipe, Serviço, Categoria, Urgência e Versão do Produto/Release (<code>CampoId = 133948</code>).</td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_TicketsPorClientePeriodo</code></td>
+                <td><code>DataAbertura</code></td>
+                <td>Base detalhada para o <strong>Donut e Grid por Cliente e Serviço no Período</strong> (filtrável por Equipe, Serviço e Data de Abertura).</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="screenshot-placeholder-box">
+    <div class="screenshot-placeholder-box" style="padding: 1.5mm 3mm;">
         <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot da tela 02 - Cadastro de Dataset (Schema mart) no Apache Superset]</div>
         <div class="ui-mockup">
             <div class="ui-mockup-topbar">
                 <span>New dataset · Add dataset to Superset</span>
                 <span style="color: #F3C65F;">Datasets ▸ + Dataset</span>
             </div>
-            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2.5mm;">
+            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2.5mm; padding: 2mm;">
                 <div class="ui-field">
                     <span class="ui-field-label">1. Database</span>
                     <div class="ui-field-input">MovideskDM</div>
@@ -1594,7 +1596,7 @@ def build_manual_2_html() -> str:
                     <div class="ui-field-input">mart</div>
                 </div>
                 <div class="ui-field">
-                    <span class="ui-field-label">3. Table / View</span>
+                    <span class="ui-field-label">3. Table / View (9 disponíveis)</span>
                     <div class="ui-field-input">vw_VisaoGeralKpis</div>
                 </div>
             </div>
@@ -1604,99 +1606,111 @@ def build_manual_2_html() -> str:
     """
 
     # -------------------------------------------------------------------------
-    # PÁGINA 4: CAPÍTULO 03 - CRIAÇÃO DE GRÁFICOS (SALA DE GUERRA)
+    # PÁGINA 4: CAPÍTULO 03 - CRIAÇÃO DE GRÁFICOS (DASHBOARD MOVIDESK BI)
     # -------------------------------------------------------------------------
     p4 = """
     <div class="chapter-header">
         <span class="chapter-badge">Capítulo 03</span>
         <div class="chapter-title-block">
-            <h2>Criação de Gráficos (Sala de Guerra &amp; Big Numbers)</h2>
-            <span>Tutorial Passo a Passo ("Mastigado") para Criar um Card Big Number Arrastando Métricas</span>
+            <h2>Criação de Gráficos (Dashboard - Movidesk BI)</h2>
+            <span>Tutorial Passo a Passo ("Mastigado") para Criar Big Numbers e Gráficos no Superset 6.1.0</span>
         </div>
     </div>
 
-    <p class="lead-text">
-        A <strong>Sala de Guerra</strong> tem no seu topo os indicadores executivos instantâneos (<em>Big Numbers</em>). Veja abaixo como criar passo a passo o cartão de <strong>Backlog Atual (Chamados em Aberto)</strong> arrastando a métrica da view <code>mart.vw_VisaoGeralKpis</code>:
+    <p class="lead-text" style="margin-bottom: 2.2mm;">
+        O <strong>Dashboard - Movidesk BI</strong> (<code>/superset/dashboard/dashboard-movidesk/</code>) combina 15 gráficos em 4 blocos com 3 filtros globais (<strong>Equipe</strong>, <strong>Serviço</strong> e <strong>Período</strong>). Veja como criar manualmente o cartão de <strong>Backlog Atual</strong> da view <code>mart.vw_VisaoGeralKpis</code>:
     </p>
 
-    <div class="steps-container">
+    <div class="steps-container compact" style="margin-bottom: 2.5mm;">
         <div class="step-row">
             <div class="step-circle">1</div>
             <div class="step-text">
-                <strong>Iniciar Novo Gráfico:</strong> No menu superior, clique em <strong>Charts</strong> → botão <strong><code>+ Chart</code></strong>. Em <em>Choose a dataset</em>, selecione <strong><code>vw_VisaoGeralKpis</code></strong>. Na galeria de tipos (<em>KPI</em>), clique em <strong><code>Big Number</code></strong> e depois no botão azul <strong><code>Create New Chart</code></strong>.
+                <strong>Iniciar Novo Gráfico:</strong> Em <strong>Charts</strong> → <strong><code>+ Chart</code></strong>, escolha <strong><code>vw_VisaoGeralKpis</code></strong>, selecione <strong><code>Big Number</code></strong> e clique em <strong><code>Create New Chart</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>Arrastar a Métrica para o Campo METRIC:</strong> Na coluna esquerda da tela de edição (<em>Columns</em>), localize a coluna numérica <strong><code>BacklogAtual</code></strong>. Clique e <strong>arraste-a para dentro da caixa <code>METRIC</code></strong> (na aba central <em>DATA</em>). Na janelinha que abrir, na aba <em>SIMPLE</em>, confirme o agregador <strong><code>SUM (Soma)</code></strong> e clique em <strong><code>Save</code></strong>.
+                <strong>Arrastar Métrica:</strong> Em <em>Columns</em>, arraste <strong><code>BacklogAtual</code></strong> para <code>METRIC</code>, confirme o agregador <strong><code>SUM</code></strong> e clique em <strong><code>Save</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Definir Subtítulo e Formatação:</strong> No campo <strong><code>SUBHEADER</code></strong>, digite <code>Chamados Ativos na Fila</code>. Clique na aba <strong>CUSTOMIZE</strong> (ao lado de DATA) e em <strong>Number format</strong> selecione <code>,d</code> (exibe inteiro sem casas decimais). Clique em <strong><code>Update chart</code></strong> para ver o número gigante na tela!
+                <strong>Subtítulo e Formato:</strong> Em <strong><code>SUBHEADER</code></strong>, digite <code>Chamados Ativos na Fila</code>; em <strong>CUSTOMIZE</strong> selecione formato <code>,d</code> e clique em <strong><code>Update chart</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">4</div>
             <div class="step-text">
-                <strong>Salvar no Dashboard:</strong> Clique no botão superior direito <strong><code>Save</code></strong>. Em <em>CHART NAME</em>, digite <code>KPI - Backlog Atual</code>. Em <em>ADD TO DASHBOARD</em>, digite/selecione <code>Sala de Guerra Movidesk</code> e clique em <strong><code>Save &amp; go to dashboard</code></strong>.
+                <strong>Salvar no Dashboard:</strong> Clique em <strong><code>Save</code></strong>, nomeie como <code>KPI - Backlog Atual</code>, associe a <code>Dashboard - Movidesk BI</code> e finalize em <strong><code>Save &amp; go to dashboard</code></strong>.
             </div>
         </div>
     </div>
 
-    <table class="zebra-table">
+    <table class="zebra-table compact" style="margin-bottom: 1.8mm; font-size: 7pt;">
         <thead>
             <tr>
-                <th style="width: 24%;">Gráfico da Sala de Guerra</th>
-                <th style="width: 23%;">Dataset (Schema mart)</th>
-                <th style="width: 20%;">Tipo no Superset</th>
-                <th>O que arrastar para Metric e Dimensions</th>
+                <th style="width: 21%; padding: 1.2mm 1.5mm;">Gráficos do Dashboard</th>
+                <th style="width: 22%; padding: 1.2mm 1.5mm;">Dataset (Schema mart)</th>
+                <th style="width: 15%; padding: 1.2mm 1.5mm;">Tipo Superset 6.1</th>
+                <th style="padding: 1.2mm 1.5mm;">Configuração Principal (X-Axis / Metrics / Dimensions)</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td><strong>1. Cards Topo (Backlog, SLA Vencido, Crítico &lt; 4h)</strong></td>
-                <td><code>vw_VisaoGeralKpis</code></td>
-                <td><code>Big Number</code></td>
-                <td><strong>Metric:</strong> <code>SUM(BacklogAtual)</code>, <code>SUM(SlaVencidos)</code>, <code>SUM(SlaIminente4h)</code> (1 card para cada).</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>1–6. Big Numbers Topo</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_VisaoGeralKpis</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>big_number_total</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>SUM(BacklogAtual)</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code>, <code>AVG(FcrUltimos30DiasPct)</code>.</td>
             </tr>
             <tr>
-                <td><strong>2. Evolução Diária da Fila (90 dias)</strong></td>
-                <td><code>vw_BacklogEvolucao</code></td>
-                <td><code>Time-series Area Chart</code></td>
-                <td><strong>Time Column:</strong> <code>DataSnapshot</code> | <strong>Metric:</strong> <code>SUM(QtdTickets)</code> e <code>SUM(QtdSlaVencido)</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>7. Radar Preditivo de SLA</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_SlaRadar</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>raw</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;">Ordenado por <code>OrdemGravidade ASC</code> e <code>MinutosParaVencer ASC</code> com Cliente e Serviço.</td>
             </tr>
             <tr>
-                <td><strong>3. Termômetro Preditivo de SLA (Fila Viva)</strong></td>
-                <td><code>vw_SlaRadar</code></td>
-                <td><code>Table</code></td>
-                <td><strong>Dimensions:</strong> <code>TicketId</code>, <code>Cliente</code>, <code>Assunto</code>, <code>Analista</code>, <code>FaixaRiscoSla</code>, <code>MinutosParaVencer</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>8. Evolução Backlog (90d)</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_BacklogEvolucao</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>echarts_area</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>X-Axis:</strong> <code>DataSnapshot</code> (P1D) | <strong>Metrics:</strong> <code>SUM(QtdTickets)</code> e <code>SUM(QtdSlaVencido)</code>.</td>
             </tr>
             <tr>
-                <td><strong>4. Gargalos por Status (Onde o ticket para)</strong></td>
-                <td><code>vw_StatusAging</code></td>
-                <td><code>Bar Chart</code> (Horizontal)</td>
-                <td><strong>Dimensions:</strong> <code>Status</code> | <strong>Metric:</strong> <code>AVG(HorasUteisMedias)</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>9. Throughput Diário</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_ThroughputDiario</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>echarts_timeseries_bar</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>X-Axis:</strong> <code>Data</code> (P1D) | <strong>Metrics:</strong> <code>SUM(Abertos)</code> e <code>SUM(Resolvidos)</code>.</td>
             </tr>
             <tr>
-                <td><strong>5. Radar de Clientes Silenciosos (Churn)</strong></td>
-                <td><code>vw_ClienteRaioX</code></td>
-                <td><code>Table</code></td>
-                <td><strong>Dimensions:</strong> <code>Cliente</code>, <code>StatusRelacionamento</code>, <code>DiasDesdeUltimoTicket</code>, <code>SlaCumpridoPct</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>10–12. Aging, Status e Demanda</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_BacklogAging</code>, <code>vw_StatusAging</code>, <code>vw_MapaDemanda</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>raw</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;">Faixas &gt;48h sem ação, gargalos (Horas Úteis/Corridas) e Pareto Serviço/Categoria/Versão.</td>
+            </tr>
+            <tr>
+                <td style="padding: 0.9mm 1.5mm;"><strong>13. Raio-X Empresas &amp; Churn</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_ClienteRaioX</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>aggregate</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>Group By:</strong> <code>Cliente, Servico, Equipe, StatusRelacionamento, DataUltimoTicket</code> + <code>%Total</code>.</td>
+            </tr>
+            <tr>
+                <td style="padding: 0.9mm 1.5mm;"><strong>14–15. Clientes no Período</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_TicketsPorClientePeriodo</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>pie</code> + <code>table</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>Group By:</strong> <code>Cliente, Servico</code> | <strong>Metric:</strong> <code>SUM(QtdTickets)</code> | Filtro <code>DataAbertura</code> (Este mês).</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="screenshot-placeholder-box">
-        <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot da tela 03 - Construtor de Gráfico Big Number (Arrastando Métrica SUM(BacklogAtual))]</div>
+    <div class="screenshot-placeholder-box" style="padding: 1.2mm 2.5mm; margin-top: 1.2mm;">
+        <div class="screenshot-placeholder-tag" style="margin-bottom: 1mm;">[INSERIR IMAGEM AQUI: Tela 03 - Construtor Big Number (SUM(BacklogAtual))]</div>
         <div class="ui-mockup">
             <div class="ui-mockup-topbar">
                 <span>Chart Builder · Dataset: mart.vw_VisaoGeralKpis · Visualization: Big Number</span>
-                <span style="color: #F3C65F;">Botão: Save ▸ Sala de Guerra Movidesk</span>
+                <span style="color: #F3C65F;">Botão: Save ▸ Dashboard - Movidesk BI</span>
             </div>
-            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1.1fr 1.3fr 1.2fr; gap: 2.5mm; align-items: center;">
+            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1.1fr 1.3fr 1.2fr; gap: 2.5mm; align-items: center; padding: 1.4mm 2mm;">
                 <div class="ui-field">
                     <span class="ui-field-label">Colunas do Dataset (Arrastar)</span>
                     <div class="ui-field-input"># BacklogAtual  ───►</div>
@@ -1705,16 +1719,16 @@ def build_manual_2_html() -> str:
                 <div class="ui-field">
                     <span class="ui-field-label">Aba DATA ▸ Campo METRIC</span>
                     <div class="ui-field-input" style="border-left-color: #C59217;">SUM(BacklogAtual)</div>
-                    <span class="ui-field-label" style="margin-top: 1mm;">Campo SUBHEADER</span>
+                    <span class="ui-field-label" style="margin-top: 0.6mm;">Campo SUBHEADER</span>
                     <div class="ui-field-input">Chamados Ativos na Fila</div>
                 </div>
-                <div style="background: #0B3B52; color: #fff; border-radius: 1.2mm; padding: 2.5mm; text-align: center;">
-                    <div style="font-size: 16pt; font-weight: 800; color: #F3C65F;">142</div>
-                    <div style="font-size: 7pt;">Chamados Ativos na Fila</div>
+                <div style="background: #0B3B52; color: #fff; border-radius: 1.2mm; padding: 1.4mm; text-align: center;">
+                    <div style="font-size: 14pt; font-weight: 800; color: #F3C65F;">142</div>
+                    <div style="font-size: 6.8pt;">Chamados Ativos na Fila</div>
                 </div>
             </div>
         </div>
-        <div class="screenshot-caption">Figura 3.1 — Esquema visual do construtor Big Number no Superset arrastando BacklogAtual para a caixa METRIC.</div>
+        <div class="screenshot-caption" style="margin-top: 1mm;">Figura 3.1 — Esquema visual do construtor Big Number no Superset arrastando BacklogAtual para a caixa METRIC.</div>
     </div>
     """
 
@@ -1759,7 +1773,7 @@ def build_manual_2_html() -> str:
         <div class="step-row">
             <div class="step-circle">4</div>
             <div class="step-text">
-                <strong>Publicar o Dashboard (Published):</strong> Na tela do Dashboard <em>Sala de Guerra Movidesk</em>, certifique-se de que a tag ao lado do título está como <span class="badge-pill badge-green">Published</span> (e não <em>Draft</em>). Usuários <code>Gamma</code> só enxergam dashboards publicados!
+                <strong>Publicar o Dashboard (Published):</strong> Na tela do <em>Dashboard - Movidesk BI</em>, certifique-se de que a tag ao lado do título está como <span class="badge-pill badge-green">Published</span> (e não <em>Draft</em>). Usuários <code>Gamma</code> só enxergam dashboards publicados!
             </div>
         </div>
     </div>
@@ -1994,18 +2008,18 @@ def render_dict_table(rows: List[tuple], dense: bool = False, col1_label: str = 
 
 def build_manual_3_html() -> str:
     """
-    Constrói o HTML completo e exaustivo (12 páginas A4) do Manual 03:
+    Constrói o HTML completo e exaustivo (13 páginas A4) do Manual 03:
     MANUAL DE ARQUITETURA - Dicionário de Dados Completo (MovideskDM).
     """
     _ = consultar_information_schema_local()
     header_right_title = "MANUAL DE ARQUITETURA - Dicionário de Dados"
     cover_title = "MANUAL DE ARQUITETURA - Dicionário de Dados (MovideskDM)"
-    total_pages = 12
+    total_pages = 13
 
     img_ssms = img_to_data_uri("ssms_arvore_movideskdm.png")
 
     # =========================================================================
-    # PÁGINA 01: CAPA EXECUTIVA + 3 DESTAQUES + ÍNDICE (12 PÁGs) + ÁRVORE SSMS
+    # PÁGINA 01: CAPA EXECUTIVA + 3 DESTAQUES + ÍNDICE (13 PÁGs) + ÁRVORE SSMS
     # =========================================================================
     p1 = f"""
     <div class="cover-banner" style="padding: 5.5mm 7mm;">
@@ -2014,7 +2028,7 @@ def build_manual_3_html() -> str:
         <p>Guia definitivo de modelagem de dados, arquitetura em camadas (Schemas), especificação física coluna a coluna (<code>INFORMATION_SCHEMA.COLUMNS</code>) e catálogo oficial de métricas e Views para o Apache Superset.</p>
         <div class="cover-meta-strip">
             <span><strong>Banco:</strong> SQL Server (MovideskDM)</span>
-            <span><strong>Objetos:</strong> 5 Schemas · 18 Tabelas · 8 Views</span>
+            <span><strong>Objetos:</strong> 5 Schemas · 18 Tabelas · 9 Views</span>
             <span><strong>Fuso Oficial:</strong> Brasília (BRT / UTC-3)</span>
         </div>
     </div>
@@ -2042,8 +2056,8 @@ def build_manual_3_html() -> str:
         <div class="highlight-card">
             <div class="highlight-num">03</div>
             <div class="highlight-content">
-                <h3>Dicionário Oficial das 8 Views</h3>
-                <p>Especificação definitiva coluna por coluna das 8 Views do schema <code>mart</code> para auditoria executiva de KPIs da Diretoria.</p>
+                <h3>Dicionário Oficial das 9 Views</h3>
+                <p>Especificação definitiva coluna por coluna das 9 Views do schema <code>mart</code> e índices <em>covering</em> para auditoria executiva de KPIs.</p>
             </div>
         </div>
     </div>
@@ -2075,9 +2089,9 @@ def build_manual_3_html() -> str:
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 03</span>
                     <span class="toc-title">Dicionário Definitivo das Views Analíticas (Schema mart)</span>
-                    <span class="toc-desc">— Regra de negócio exata de cada coluna das 8 Views do Apache Superset</span>
+                    <span class="toc-desc">— Regra exata de cada coluna das 9 Views + Índices Covering</span>
                 </div>
-                <span class="toc-page">Páginas 09 a 12</span>
+                <span class="toc-page">Páginas 09 a 13</span>
             </li>
         </ul>
     </div>
@@ -2085,7 +2099,7 @@ def build_manual_3_html() -> str:
     <div class="screenshot-placeholder-box" style="padding: 1.8mm 3mm;">
         <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot do SSMS com a árvore do banco MovideskDM]</div>
         {f'<div class="screenshot-img-wrapper"><img src="{img_ssms}" style="max-height: 52mm;" alt="Árvore do banco MovideskDM no SSMS" /></div>' if img_ssms else ''}
-        <div class="screenshot-caption">Figura 0.1 — Árvore real do banco MovideskDM no SQL Server Management Studio (SSMS) exibindo as 18 Tabelas e as 8 Exibições (Views).</div>
+        <div class="screenshot-caption">Figura 0.1 — Árvore do banco MovideskDM no SQL Server Management Studio (SSMS) exibindo Tabelas e Exibições (Views).</div>
     </div>
     """
 
@@ -2127,7 +2141,7 @@ def build_manual_3_html() -> str:
         <div class="step-row">
             <div class="step-circle">4</div>
             <div class="step-text">
-                <strong>Schema <code>mart</code> (Camada Ouro — A Blindagem Semântica do BI):</strong> É a camada exclusiva de consumo do Apache Superset. Encapsula todos os <code>LEFT JOINs</code> entre Fatos e Dimensões, regras de congelamento de SLA, tratamento de campos nulos (<code>ISNULL</code>) e fallbacks de status dentro de <strong>8 Views oficiais</strong>. Isso garante que o Superset jamais erre um cálculo ou apresente números conflitantes entre painéis.
+                <strong>Schema <code>mart</code> (Camada Ouro — A Blindagem Semântica do BI):</strong> É a camada exclusiva de consumo do Apache Superset. Encapsula todos os <code>LEFT JOINs</code> entre Fatos e Dimensões, regras de congelamento de SLA, tratamento de campos nulos (<code>ISNULL</code>) e fallbacks de status dentro de <strong>9 Views oficiais</strong>. Isso garante que o Superset jamais erre um cálculo ou apresente números conflitantes entre painéis.
             </div>
         </div>
     </div>
@@ -2169,8 +2183,8 @@ def build_manual_3_html() -> str:
             <tr>
                 <td><span class="badge-pill badge-green">mart</span></td>
                 <td><strong>Ouro (BI)</strong></td>
-                <td><code>vw_VisaoGeralKpis</code>, <code>vw_SlaRadar</code>, <code>vw_BacklogAging</code>, <code>vw_StatusAging</code>, <code>vw_ThroughputDiario</code>, <code>vw_ClienteRaioX</code>, <code>vw_MapaDemanda</code>, <code>vw_BacklogEvolucao</code></td>
-                <td><strong>Blindagem Semântica:</strong> Fonte única da verdade consumida pelos Datasets e Gráficos da Sala de Guerra no Apache Superset.</td>
+                <td><code>vw_VisaoGeralKpis</code>, <code>vw_SlaRadar</code>, <code>vw_BacklogAging</code>, <code>vw_StatusAging</code>, <code>vw_ThroughputDiario</code>, <code>vw_ClienteRaioX</code>, <code>vw_MapaDemanda</code>, <code>vw_BacklogEvolucao</code>, <code>vw_TicketsPorClientePeriodo</code></td>
+                <td><strong>Blindagem Semântica:</strong> Fonte única da verdade consumida pelos Datasets e Gráficos do <strong>Dashboard - Movidesk BI</strong> no Apache Superset.</td>
             </tr>
         </tbody>
     </table>
@@ -2525,9 +2539,9 @@ def build_manual_3_html() -> str:
     vw_kpis_rows = [
         ("Equipe", "NVARCHAR(128)", "Nome da equipe de suporte que detém a posse atual do chamado."),
         ("BacklogAtual", "INT", "Volume exato de chamados em aberto no momento atual (baseStatus diferente de Resolvido, Fechado ou Cancelado) sob responsabilidade da equipe."),
-        ("SlaVencidos", "INT", "Subconjunto do Backlog Atual cujo prazo limite (SlaDataSolucao) já foi ultrapassado em relação à hora atual."),
-        ("SlaIminente4h", "INT", "Subconjunto do Backlog Atual cujo prazo de solução expira nas próximas 4 horas (corridas ou úteis, dependendo do contrato)."),
-        ("SlaPausados", "INT", "Subconjunto do Backlog Atual onde o relógio de SLA está congelado (ex: Aguardando Cliente)."),
+        ("SlaVencidos", "INT", "Subconjunto do Backlog Atual cujo prazo limite (<code>SlaDataSolucao</code>) já foi ultrapassado e cujo SLA <strong>não está pausado</strong> (<code>SlaPausadoEfetivo = 0</code>)."),
+        ("SlaIminente4h", "INT", "Subconjunto do Backlog Atual não pausado cujo prazo expira nas próximas <code>4 horas</code> (parametrizável via <code>ctl.Parametro</code>)."),
+        ("SlaPausados", "INT", "Subconjunto do Backlog Atual onde o relógio de SLA está congelado (ex: Aguardando Cliente ou <code>SlaSolucaoPausado = 1</code>)."),
         ("EmDependenciaDev", "INT", "Subconjunto do Backlog Atual estacionado em um status de dependência de terceiros (ex: Aguardando Desenvolvimento)."),
         ("AbertosHoje", "INT", "Quantidade de chamados criados (DataCriacao) no dia corrente, atribuídos à equipe."),
         ("ResolvidosHoje", "INT", "Quantidade de chamados que ganharam o status de Resolvido (DataResolucao) no dia corrente pela equipe."),
@@ -2542,7 +2556,7 @@ def build_manual_3_html() -> str:
         ("Categoria / Urgencia", "NVARCHAR(128)", "Categoria funcional e nível de criticidade (Baixa, Média, Alta, Urgente) do ticket."),
         ("Status", "NVARCHAR(128)", "Status atual detalhado em que o chamado se encontra."),
         ("GrupoStatus", "NVARCHAR(60)", "Macro-etapa do status (<code>Com Analista</code>, <code>Aguardando Cliente</code>, <code>Dependência Externa / Dev</code>, etc.)."),
-        ("Equipe", "NVARCHAR(128)", "Nome da equipe responsável pelo atendimento (<code>ISNULL(t.Equipe, 'Sem Equipe')</code>)."),
+        ("Equipe", "NVARCHAR(128)", "Nome da equipe responsável pelo atendimento (<code>ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), ''), 'Sem Equipe')</code>)."),
         ("Analista", "NVARCHAR(256)", "Nome do analista proprietário do chamado (obtido via <code>LEFT JOIN core.Dim_Agente</code>; exibe <code>'Não Atribuído'</code> se nulo)."),
         ("Cliente", "NVARCHAR(256)", "Nome da <strong>Empresa Cliente</strong> proprietária do chamado (resolve hierarquia <code>Contato → Empresa</code> via <code>ISNULL(emp.Nome, cli.Nome)</code>)."),
         ("DataCriacao / DataUltimaAcao", "DATETIME2(0)", "Datas de abertura e do último trâmite registrado no chamado, já em Horário de Brasília (BRT)."),
@@ -2550,7 +2564,7 @@ def build_manual_3_html() -> str:
         ("SlaDataSolucao", "DATETIME2(0)", "Data e hora limite em que o chamado deve ser resolvido antes de estourar o SLA (em BRT)."),
         ("SlaSolucaoPausado", "BIT", "Indica se a contagem do prazo de solução está pausada (<code>1</code> = Pausado; <code>0</code> = Correndo)."),
         ("FaixaRiscoSla", "VARCHAR(20)", "Termômetro preditivo calculado em tempo real: <code>'Vencido'</code> (prazo ultrapassado), <code>'Crítico (&lt; 2h)'</code> (&le; 120 min), <code>'Alerta (&lt; 4h)'</code> (&le; parâmetro <code>ctl.Parametro</code>), <code>'Atenção (&lt; 8h)'</code> (&le; 480 min), <code>'No Prazo (&gt; 8h)'</code>, <code>'SLA Pausado'</code> ou <code>'Sem SLA Definido'</code>."),
-        ("OrdemGravidade", "INT", "Código numérico de prioridade visual (<code>1</code> = Vencido, <code>2</code> = Crítico &lt; 2h, <code>3</code> = Alerta &lt; 4h, <code>4</code> = Atenção &lt; 8h, <code>5</code> = Pausado, <code>6</code> = Sem SLA, <code>7</code> = No Prazo) para ordenar a tabela da Sala de Guerra pelos casos mais urgentes no topo."),
+        ("OrdemGravidade", "INT", "Código numérico de prioridade visual (<code>1</code> = Vencido, <code>2</code> = Crítico &lt; 2h, <code>3</code> = Alerta &lt; 4h, <code>4</code> = Atenção &lt; 8h, <code>5</code> = Pausado, <code>6</code> = Sem SLA, <code>7</code> = No Prazo) para ordenar a tabela do Dashboard pelos casos mais urgentes no topo."),
         ("MinutosParaVencer", "INT", "Saldo exato em minutos até o vencimento (<code>DATEDIFF(MINUTE, SYSDATETIME(), SlaDataSolucao)</code>). Valores negativos indicam há quantos minutos o SLA já estourou."),
         ("HorasSemInteracao", "INT", "Quantidade de horas corridas desde o último trâmite registrado no ticket (<code>DATEDIFF(HOUR, DataUltimaAcao, SYSDATETIME())</code>)."),
     ]
@@ -2565,7 +2579,7 @@ def build_manual_3_html() -> str:
     </div>
 
     <div class="obj-banner">
-        <div><strong>1. mart.vw_VisaoGeralKpis</strong> — Big Numbers Executivos do Topo da Sala de Guerra</div>
+        <div><strong>1. mart.vw_VisaoGeralKpis</strong> — Big Numbers Executivos do Topo do Dashboard</div>
         <span class="obj-meta">Agrupamento: 1 linha por Equipe · 9 Colunas</span>
     </div>
     {render_dict_table(vw_kpis_rows, dense=True, col2_label="Tipo SQL")}
@@ -2646,16 +2660,18 @@ def build_manual_3_html() -> str:
     ]
 
     vw_clienteraiox_rows = [
-        ("ClienteId", "VARCHAR(64)", "Identificador único da <strong>Empresa Cliente</strong> no Movidesk (filtra apenas Pessoas Jurídicas/Departamentos <code>TipoPessoa IN (2, 4)</code> ou organizações titulares de tickets, eliminando duplicidade com pessoas físicas)."),
+        ("ClienteId", "VARCHAR(64)", "Identificador único da <strong>Empresa Cliente</strong> (filtra <code>TipoPessoa IN (2, 4)</code> ou empresas ativas com tickets, evitando contatos PF)."),
         ("Cliente", "NVARCHAR(256)", "Nome Fantasia / Nome de Exibição oficial da Empresa Cliente."),
         ("RazaoSocial", "NVARCHAR(256)", "Razão Social societária da Empresa Cliente cadastrada no Movidesk."),
-        ("TotalTicketsHistorico", "INT", "Volume total acumulado de chamados abertos por todos os usuários vinculados àquela Empresa Cliente em toda a base histórica."),
-        ("TicketsAtualmenteAbertos", "INT", "Quantidade de chamados da Empresa Cliente que estão em aberto no momento atual (<code>EhFinal = 0</code>)."),
-        ("TicketsDentroSla", "INT", "Quantidade de chamados resolvidos da Empresa Cliente cuja <code>DataResolucao</code> ocorreu dentro do prazo contratual (<code>DataResolucao &lt;= SlaDataSolucao</code>)."),
-        ("SlaCumpridoPct", "DECIMAL(5,1)", "Percentual histórico de cumprimento de SLA da Empresa Cliente: <code>100.0 * TicketsDentroSla / TotalTicketsResolvidosComSla</code>."),
-        ("DataUltimoTicket", "DATETIME2(0)", "Data/hora em BRT do chamado mais recente aberto pela Empresa Cliente (<code>MAX(t.DataCriacao)</code>)."),
-        ("DiasDesdeUltimoTicket", "INT", "Quantidade de dias corridos sem abertura de novos chamados pela Empresa (<code>DATEDIFF(DAY, MAX(DataCriacao), SYSDATETIME())</code>)."),
-        ("StatusRelacionamento", "VARCHAR(35)", "Termômetro de Saúde e Retenção (<em>Churn Radar</em>) parametrizado por <code>DIAS_CLIENTE_SILENCIOSO</code> (padrão <code>60</code> dias em <code>ctl.Parametro</code>):<br/>• <code>'Ativo (&lt; 30d)'</code>: Empresa abriu chamados nos últimos 29 dias;<br/>• <code>'Atenção (Silencioso 30-60d)'</code>: Empresa sem abrir chamados entre 30 e 59 dias;<br/>• <code>'Risco Churn (Silencioso &gt; 60d)'</code>: Empresa há 60 dias ou mais sem acionar o suporte (ou sem chamados)."),
+        ("Servico", "NVARCHAR(256)", "Serviço / Produto principal (<code>ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), ''), 'Não Informado')</code> ou <code>'Sem Serviço'</code>). Evita mistura entre produtos (ex.: Aquila vs. e-Guardian)."),
+        ("Equipe", "NVARCHAR(128)", "<strong>Equipe Dono Atual</strong> do par Empresa + Serviço, definida pelo chamado mais recente via <em>single-pass scan</em> (<code>MAX(DataCriacao+TicketId+Equipe)</code>, sem <code>ROW_NUMBER()</code>)."),
+        ("TotalTicketsHistorico", "INT", "Volume acumulado de chamados da Empresa naquele Serviço em toda a base histórica."),
+        ("TicketsAtualmenteAbertos", "INT", "Quantidade de chamados em aberto (<code>EhFinal = 0</code>) do par Empresa + Serviço."),
+        ("TicketsDentroSla", "INT", "Quantidade de chamados resolvidos do par Empresa + Serviço com <code>DataResolucao &lt;= SlaDataSolucao</code>."),
+        ("SlaCumpridoPct", "DECIMAL(5,1)", "Percentual histórico de cumprimento de SLA do par Empresa + Serviço: <code>100.0 * TicketsDentroSla / NULLIF(TotalSlaValido, 0)</code>."),
+        ("DataUltimoTicket", "DATETIME2(0)", "Data/hora em BRT do chamado mais recente da Empresa naquele Serviço (<code>MAX(t.DataCriacao)</code>)."),
+        ("DiasDesdeUltimoTicket", "INT", "Dias corridos sem abertura de novos chamados naquele Serviço (<code>DATEDIFF(DAY, MAX(DataCriacao), SYSDATETIME())</code>)."),
+        ("StatusRelacionamento", "VARCHAR(35)", "Radar de Retenção parametrizado por <code>DIAS_CLIENTE_SILENCIOSO</code> (<code>60</code>d): <code>'Ativo (&lt; 30d)'</code>, <code>'Atenção (Silencioso 30-60d)'</code> ou <code>'Risco Churn (Silencioso &gt; 60d)'</code>."),
     ]
 
     p10 = f"""
@@ -2674,14 +2690,14 @@ def build_manual_3_html() -> str:
     {render_dict_table(vw_throughput_rows, dense=True, col2_label="Tipo SQL")}
 
     <div class="obj-banner">
-        <div><strong>6. mart.vw_ClienteRaioX</strong> — Inteligência de Empresas Clientes, Cumprimento de SLA e Risco de Churn</div>
-        <span class="obj-meta">Granularidade: 1 linha por Empresa Cliente (Pessoa Jurídica) · 10 Colunas</span>
+        <div><strong>6. mart.vw_ClienteRaioX</strong> — Raio-X por Produto, Dono Atual e Risco de Churn (Single-Pass)</div>
+        <span class="obj-meta">Granularidade: 1 linha por (Empresa + Serviço) · 12 Colunas</span>
     </div>
     {render_dict_table(vw_clienteraiox_rows, dense=True, col2_label="Tipo SQL")}
     """
 
     # =========================================================================
-    # PÁGINA 11: CAPÍTULO 03 - VIEWS DO MART (PARTE 4: MAPA DEMANDA + BACKLOG EVOLUCAO)
+    # PÁGINA 12: CAPÍTULO 03 - VIEWS DO MART (PARTE 4: MAPA DEMANDA + BACKLOG EVOLUCAO)
     # =========================================================================
     vw_mapademanda_rows = [
         ("Equipe", "NVARCHAR(128)", "Nome da equipe de suporte responsável pelo grupo de chamados (<code>ISNULL(t.Equipe, 'Sem Equipe')</code>)."),
@@ -2730,13 +2746,61 @@ def build_manual_3_html() -> str:
         <span class="obj-meta">Fonte: core.Fato_SnapshotBacklog + Dim_Calendario + Dim_Status + Dim_Agente · 14 Colunas</span>
     </div>
     {render_dict_table(vw_backlogevolucao_rows, dense=True, col2_label="Tipo SQL")}
+    """
 
-    <div class="callout-gold" style="padding: 2mm 3mm; font-size: 8pt;">
-        <strong>Certificação Executiva de Governança (Advice Compliance Solutions):</strong> Este documento reflete fielmente a estrutura física implantada no banco <code>MovideskDM</code> (Release <code>v1.0.7+</code>). Qualquer novo gráfico ou indicador solicitado pela Diretoria no Apache Superset deve obrigatoriamente consumir uma das <strong>8 Views do schema <code>mart</code></strong> documentadas neste capítulo, garantindo 100% de paridade matemática em toda a organização.
+    # =========================================================================
+    # PÁGINA 13: CAPÍTULO 03 - PARTE 5: TICKETS POR CLIENTE + ÍNDICES COVERING
+    # =========================================================================
+    vw_clientes_periodo_rows = [
+        ("TicketId", "INT", "Identificador único do chamado no Movidesk (chave de contagem e drill-down)."),
+        ("Protocolo", "NVARCHAR(64)", "Código de protocolo oficial exibido ao cliente no Movidesk."),
+        ("DataAbertura", "DATETIME2(0)", "Data/hora de criação (<code>DataCriacao</code>) em Horário de Brasília (BRT). Coluna usada no filtro global <strong>Período</strong>."),
+        ("DataAberturaDia", "DATE", "Data civil (<code>CAST(DataCriacao AS DATE)</code>) para agrupamentos diários sem hora."),
+        ("AnoMes", "CHAR(7)", "Competência mensal no formato ISO <code>'YYYY-MM'</code> (ex.: <code>'2026-11'</code>)."),
+        ("ClienteId", "VARCHAR(64)", "Código resolvido da Empresa Cliente (<code>COALESCE(emp.ClienteId, cli.ClienteId, t.EmpresaId, 'NAO_IDENTIFICADO')</code>)."),
+        ("Cliente", "NVARCHAR(256)", "Nome Fantasia da Organização proprietária. Dimensão principal do gráfico Donut e do Grid de Share %."),
+        ("Equipe", "NVARCHAR(128)", "Equipe de suporte responsável (<code>ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), ''), 'Sem Equipe')</code>). Habilita o filtro global de Equipe."),
+        ("Analista", "NVARCHAR(256)", "Nome do analista responsável (via <code>LEFT JOIN core.Dim_Agente</code>; padrão <code>'Não Atribuído'</code>)."),
+        ("Status / StatusBase", "NVARCHAR", "Status customizado atual do Movidesk e status sistêmico base (<code>New</code>, <code>InAttendance</code>, <code>Stopped</code>, <code>Resolved</code>, etc.)."),
+        ("Situacao", "NVARCHAR(10)", "Classificação binária executiva: <code>'Encerrado'</code> (<code>EhFinal = 1</code> ou StatusBase final) ou <code>'Em Aberto'</code>."),
+        ("Servico", "NVARCHAR(256)", "Serviço normalizado (<code>ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), ''), 'Não Informado')</code>) — viabiliza o filtro global <strong>Serviço</strong>."),
+        ("Categoria / Urgencia", "NVARCHAR(128)", "Categoria funcional e criticidade operacional do chamado para segmentações complementares."),
+        ("QtdTickets", "INT", "Constante unitária (<code>1</code>) para somatória direta <code>SUM(QtdTickets)</code> no Gráfico Donut e cálculo de Percentual (<code>Share %</code>)."),
+    ]
+
+    covering_indexes_rows = [
+        ("IX_core_Dim_Cliente_RaioX", "core.Dim_Cliente (Ativo, TipoPessoa, EmpresaId)", "<code>INCLUDE (Nome, RazaoSocial)</code> — Elimina Key Lookups ao isolar Organizações ativas em <code>vw_ClienteRaioX</code>."),
+        ("IX_core_Fato_Ticket_Empresa_RaioX", "core.Fato_Ticket (EmpresaId, ServicoN1, DataCriacao DESC)", "<code>INCLUDE (Equipe, Status, StatusBase, DataResolucao, SlaDataSolucao)</code> — Viabiliza <em>single-pass Index Seek</em> no Raio-X (< 1s, fim do timeout 60s)."),
+        ("IX_core_Fato_Ticket_DataCriacao_Clientes", "core.Fato_Ticket (DataCriacao)", "<code>INCLUDE (EmpresaId, Equipe, ServicoN1, Status, StatusBase, AgenteId, Categoria, Urgencia, Protocolo)</code> — Acelera o filtro por Período em <code>vw_TicketsPorClientePeriodo</code>."),
+    ]
+
+    p12 = f"""
+    <div class="chapter-header">
+        <span class="chapter-badge">Capítulo 03</span>
+        <div class="chapter-title-block">
+            <h2>Dicionário das Views Analíticas (Parte 5) &amp; Índices Covering</h2>
+            <span>9. mart.vw_TicketsPorClientePeriodo (16 Colunas) e Otimização de Consultas do Script 08</span>
+        </div>
+    </div>
+
+    <div class="obj-banner">
+        <div><strong>9. mart.vw_TicketsPorClientePeriodo</strong> — Distribuição de Tickets por Cliente no Período (Donut &amp; Share %)</div>
+        <span class="obj-meta">Filtro: DataCriacao IS NOT NULL · 16 Colunas (compatível com Equipe, Serviço e Período)</span>
+    </div>
+    {render_dict_table(vw_clientes_periodo_rows, dense=True, col2_label="Tipo SQL")}
+
+    <div class="obj-banner">
+        <div><strong>Índices Covering de Alta Performance</strong> — Scripts 01 / 08 (MovideskDM)</div>
+        <span class="obj-meta">Eliminação de Scans e TempDB Spills no Apache Superset</span>
+    </div>
+    {render_dict_table(covering_indexes_rows, dense=True, col1_label="Nome do Índice", col2_label="Tabela &amp; Chaves")}
+
+    <div class="callout-gold" style="padding: 1.8mm 2.8mm; font-size: 7.9pt;">
+        <strong>Certificação Executiva de Governança (Advice Compliance Solutions):</strong> Este documento reflete fielmente a estrutura física implantada no banco <code>MovideskDM</code> (Release <code>v1.0.16+</code> / Script <code>08</code>). Todo gráfico do <strong>Dashboard - Movidesk BI</strong> deve consumir exclusivamente uma das <strong>9 Views do schema <code>mart</code></strong>, garantindo 100% de paridade matemática em toda a organização.
     </div>
     """
 
-    pages_list = [p1, p2, p3, p4, p4_b, p5, p6, p7, p8, p9, p10, p11]
+    pages_list = [p1, p2, p3, p4, p4_b, p5, p6, p7, p8, p9, p10, p11, p12]
     pages_html = "".join(
         render_page(header_right_title, idx, total_pages, content)
         for idx, content in enumerate(pages_list, start=1)

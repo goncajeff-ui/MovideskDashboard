@@ -757,10 +757,10 @@ code, .code-inline {
     <div class="cover-banner">
         <span class="cover-tag">Guia Passo a Passo ("Mastigado") · Engenharia de BI &amp; Analytics</span>
         <h1>MANUAL DE CONFIGURAÇÃO - Apache Superset Corporativo</h1>
-        <p>Manual técnico e operacional completo para conectar o Microsoft SQL Server (MovideskDM) ao Apache Superset 6.1.0, mapear as 8 Views analíticas como Datasets, construir os gráficos da Sala de Guerra, configurar acessos somente leitura (Role Gamma) para a Diretoria e publicar link HTTPS seguro via Ngrok.</p>
+        <p>Manual técnico e operacional completo para conectar o Microsoft SQL Server (MovideskDM) ao Apache Superset 6.1.0, provisionar automaticamente (ou manualmente) as 9 Views analíticas e os 15 gráficos do Dashboard - Movidesk BI, configurar acessos somente leitura (Role Gamma) para a Diretoria e publicar link HTTPS seguro via Ngrok.</p>
         <div class="cover-meta-strip">
             <span><strong>Plataforma:</strong> Apache Superset 6.1.0 (WSL2)</span>
-            <span><strong>Fonte de Dados:</strong> SQL Server (MovideskDM)</span>
+            <span><strong>Fonte de Dados:</strong> SQL Server (MovideskDM · 9 Views)</span>
             <span><strong>Porta Padrão:</strong> 8088 (HTTP / Ngrok HTTPS)</span>
         </div>
     </div>
@@ -774,22 +774,22 @@ code, .code-inline {
         <div class="highlight-card">
             <div class="highlight-num">01</div>
             <div class="highlight-content">
-                <h3>Conexão Direta ao MSSQL (MovideskDM)</h3>
-                <p>Configuração passo a passo da string SQLAlchemy (<code>mssql+pymssql://</code>) conectando o Superset no WSL2 ao SQL Server local no Windows.</p>
+                <h3>Setup Automático ou Manual (MovideskDM)</h3>
+                <p>Provisionamento em 1 clique via Painel (<code>HttpClient</code> nativo C#) ou configuração manual da string SQLAlchemy (<code>mssql+pymssql://</code>) no Superset.</p>
             </div>
         </div>
         <div class="highlight-card">
             <div class="highlight-num">02</div>
             <div class="highlight-content">
-                <h3>Catálogo de 8 Views Analíticas (Schema mart)</h3>
-                <p>Exposição das Views pré-calculadas em Horário de Brasília (<code>mart.vw_*</code>) como Datasets oficiais prontos para uso sem escrever código SQL.</p>
+                <h3>Catálogo de 9 Views Analíticas (Schema mart)</h3>
+                <p>Exposição das Views pré-calculadas em Horário de Brasília (<code>mart.vw_*</code>) como Datasets oficiais com filtros nativos (<code>Equipe</code>, <code>Serviço</code> e <code>Período</code>).</p>
             </div>
         </div>
         <div class="highlight-card">
             <div class="highlight-num">03</div>
             <div class="highlight-content">
-                <h3>Sala de Guerra e Gráficos Big Number</h3>
-                <p>Roteiro clique a clique para construir cartões executivos arrastando métricas (<code>SUM</code>, <code>AVG</code>) e montar o painel operacional e tático.</p>
+                <h3>Dashboard - Movidesk BI (15 Componentes)</h3>
+                <p>Roteiro clique a clique para Big Numbers, Radar SLA, Evolução <code>echarts_area</code>, Raio-X por Dono Atual e Donut/Grid de Clientes no Período.</p>
             </div>
         </div>
         <div class="highlight-card">
@@ -812,7 +812,7 @@ code, .code-inline {
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 01</span>
                     <span class="toc-title">Conectando o Banco de Dados</span>
-                    <span class="toc-desc">— Passo a passo para plugar o banco MSSQL MovideskDM no Apache Superset</span>
+                    <span class="toc-desc">— Setup Automático 1-clique ou plug manual do banco MSSQL MovideskDM no Superset</span>
                 </div>
                 <span class="toc-page">Página 02</span>
             </li>
@@ -820,15 +820,15 @@ code, .code-inline {
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 02</span>
                     <span class="toc-title">Mapeamento de Datasets</span>
-                    <span class="toc-desc">— Como expor as 8 Views do schema mart do SQL Server como Datasets no Superset</span>
+                    <span class="toc-desc">— As 9 Views do schema mart do SQL Server registradas como Datasets no Superset</span>
                 </div>
                 <span class="toc-page">Página 03</span>
             </li>
             <li class="toc-item">
                 <div class="toc-item-left">
                     <span class="toc-badge">CAPÍTULO 03</span>
-                    <span class="toc-title">Criação de Gráficos (Sala de Guerra)</span>
-                    <span class="toc-desc">— Passo a passo mastigado para criar gráficos "Big Number" e tabela de receitas</span>
+                    <span class="toc-title">Criação de Gráficos (Dashboard - Movidesk BI)</span>
+                    <span class="toc-desc">— Guia prático de Big Numbers, gráficos de área/tabela e filtros globais</span>
                 </div>
                 <span class="toc-page">Página 04</span>
             </li>
@@ -874,12 +874,12 @@ code, .code-inline {
         <span class="chapter-badge">Capítulo 01</span>
         <div class="chapter-title-block">
             <h2>Conectando o Banco de Dados (MSSQL MovideskDM)</h2>
-            <span>Passo a Passo Mastigado para Plugar o Microsoft SQL Server no Apache Superset</span>
+            <span>Setup Automático via Painel de Controle ou Configuração Manual no Apache Superset</span>
         </div>
     </div>
 
     <p class="lead-text">
-        Com o Apache Superset iniciado pelo Painel de Controle (<span class="badge-pill badge-green">Online</span> na porta <code>8088</code>), o primeiro passo é cadastrar a conexão com o banco de dados <strong>MovideskDM</strong> que roda no seu SQL Server local. Siga exatamente o roteiro abaixo:
+        Com o Apache Superset iniciado pelo Painel de Controle (<span class="badge-pill badge-green">Online</span> na porta <code>8088</code>), você pode usar o card <strong>Configuração Inicial do Superset</strong> (botão <strong>Executar Setup Automático</strong>) para criar tudo em segundos — ou seguir o roteiro manual abaixo para plugar o banco <strong>MovideskDM</strong> pela interface web:
     </p>
 
     <div class="steps-container">
@@ -989,13 +989,13 @@ code, .code-inline {
     <div class="chapter-header">
         <span class="chapter-badge">Capítulo 02</span>
         <div class="chapter-title-block">
-            <h2>Mapeamento de Datasets (Expondo as Views do Schema mart)</h2>
-            <span>Como Transformar as 8 Views Analíticas do SQL Server em Fontes de Dados para os Gráficos</span>
+            <h2>Mapeamento de Datasets (As 9 Views do Schema mart)</h2>
+            <span>Como Transformar as 9 Views Analíticas do SQL Server em Fontes de Dados para os Gráficos</span>
         </div>
     </div>
 
     <p class="lead-text">
-        No Apache Superset, os gráficos não leem tabelas diretamente: eles consomem <strong>Datasets</strong>. Toda a inteligência de negócio da Advice (cálculo de SLA, conversão para Horário de Brasília, faixas de Aging e vínculo de Empresas) já está pronta dentro do schema <strong><code>mart</code></strong> no banco <code>MovideskDM</code>. Basta registrar cada uma das 8 Views seguindo o passo a passo abaixo:
+        No Apache Superset, os gráficos consomem <strong>Datasets</strong>. Toda a inteligência de negócio da Advice (SLA, Horário de Brasília, Aging, Dono Atual por Produto e Clientes no Período) já vem pronta dentro do schema <strong><code>mart</code></strong> no banco <code>MovideskDM</code> (ou é registrada automaticamente pelo Setup do Painel):
     </p>
 
     <div class="steps-container">
@@ -1008,25 +1008,22 @@ code, .code-inline {
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>Selecionar Banco, Schema e View:</strong> Na lateral esquerda, preencha os 3 seletores na ordem:
-                <br/>• Em <strong>DATABASE</strong>: selecione <code>MovideskDM</code>.
-                <br/>• Em <strong>SCHEMA</strong>: selecione <strong><code>mart</code></strong> (muito importante: não use <code>raw</code> nem <code>core</code> nos gráficos).
-                <br/>• Em <strong>TABLE</strong>: escolha a View desejada (comece por <code>vw_VisaoGeralKpis</code>).
+                <strong>Selecionar Banco, Schema e View:</strong> Preencha: <strong>DATABASE</strong> = <code>MovideskDM</code>, <strong>SCHEMA</strong> = <code>mart</code> (nunca use <code>raw</code>/<code>core</code> nos gráficos) e <strong>TABLE</strong> = View desejada.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Salvar o Dataset:</strong> Clique no botão inferior direito <strong><code>Create Dataset and Create Chart</code></strong> (ou apenas <em>Create Dataset</em>). Repita o processo para as 8 Views listadas na tabela abaixo — leva menos de 2 minutos para cadastrar todas!
+                <strong>Salvar o Dataset:</strong> Clique em <strong><code>Create Dataset</code></strong> para cada uma das <strong>9 Views</strong> abaixo (ou utilize o botão <em>Executar Setup Automático</em> do Painel para registrar e sincronizar colunas em 1 clique).
             </div>
         </div>
     </div>
 
-    <table class="zebra-table">
+    <table class="zebra-table compact">
         <thead>
             <tr>
-                <th style="width: 28%;">View no Schema mart</th>
-                <th style="width: 20%;">Coluna de Tempo</th>
+                <th style="width: 30%;">View no Schema mart</th>
+                <th style="width: 17%;">Coluna de Tempo</th>
                 <th>O que esta View entrega pronta para o Dashboard</th>
             </tr>
         </thead>
@@ -1034,54 +1031,59 @@ code, .code-inline {
             <tr>
                 <td><code>mart.vw_VisaoGeralKpis</code></td>
                 <td><em>Snapshot Atual</em></td>
-                <td>Big Numbers por Equipe: <code>BacklogAtual</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>SlaPausados</code>, <code>EmDependenciaDev</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code> e <code>FcrUltimos30DiasPct</code>.</td>
+                <td>Big Numbers por Equipe: <code>BacklogAtual</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code> e <code>FcrUltimos30DiasPct</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_SlaRadar</code></td>
                 <td><code>DataCriacao</code></td>
-                <td>Fila aberta classificada por risco de SLA (<code>Vencido</code>, <code>Crítico &lt; 2h</code>, <code>Alerta &lt; 4h</code>) com nome da Empresa, Analista e <code>MinutosParaVencer</code>.</td>
+                <td>Fila aberta ordenada por gravidade (<code>Vencido</code>, <code>Crítico &lt; 2h</code>, <code>Alerta &lt; 4h</code>) com Empresa, Serviço, Equipe e <code>MinutosParaVencer</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_BacklogEvolucao</code></td>
                 <td><code>DataSnapshot</code></td>
-                <td>Curva histórica diária (últimos 90 dias + hoje) de <code>QtdTickets</code>, <code>QtdSlaVencido</code> e <code>QtdNoPrazo</code> por Equipe, Analista e Status.</td>
+                <td>Curva histórica diária (90 dias + hoje) de <code>QtdTickets</code>, <code>QtdSlaVencido</code> e <code>QtdNoPrazo</code> por Equipe, Analista e Status.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_BacklogAging</code></td>
                 <td><code>DataCriacao</code></td>
-                <td>Idade dos chamados em aberto (<code>FaixaIdade</code>: 0 a 2d até &gt; 30d) e flag <code>SemInteracaoMais48h</code>.</td>
+                <td>Idade dos chamados em aberto (<code>FaixaIdade</code>: 0–2d até &gt; 30d), Serviço, Equipe e alerta <code>SemInteracaoMais48h</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_StatusAging</code></td>
                 <td><em>Agregado</em></td>
-                <td>Gargalos operacionais: tempo médio e total (em horas úteis e corridas) gasto em cada Status.</td>
+                <td>Gargalos operacionais por Equipe e Status em horas úteis médias e horas corridas médias/totais.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_ThroughputDiario</code></td>
                 <td><code>Data</code></td>
-                <td>Balanço diário de <code>Abertos</code> vs. <code>Resolvidos</code> e <code>SaldoLiquido</code> acoplado ao calendário de dias úteis.</td>
+                <td>Balanço diário por Equipe de <code>Abertos</code> vs. <code>Resolvidos</code> e <code>SaldoLiquido</code> sobre a <code>Dim_Calendario</code>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_ClienteRaioX</code></td>
                 <td><code>DataUltimoTicket</code></td>
-                <td>Saúde por <strong>Empresa Cliente</strong>: volume histórico, abertos, % SLA cumprido e alerta de <strong>Risco Churn (Silencioso &gt; 60d)</strong>.</td>
+                <td>Saúde por <strong>Empresa + Serviço + Equipe (Dono Atual)</strong> com <em>single-pass</em> rápido: % SLA e <strong>Risco Churn (&gt; 60d)</strong>.</td>
             </tr>
             <tr>
                 <td><code>mart.vw_MapaDemanda</code></td>
                 <td><em>Agregado</em></td>
-                <td>Pareto de Categorias, Urgência e Versão do Produto/Release (<code>CampoId = 133948</code>).</td>
+                <td>Pareto por Equipe, Serviço, Categoria, Urgência e Versão do Produto/Release (<code>CampoId = 133948</code>).</td>
+            </tr>
+            <tr>
+                <td><code>mart.vw_TicketsPorClientePeriodo</code></td>
+                <td><code>DataAbertura</code></td>
+                <td>Base detalhada para o <strong>Donut e Grid por Cliente e Serviço no Período</strong> (filtrável por Equipe, Serviço e Data de Abertura).</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="screenshot-placeholder-box">
+    <div class="screenshot-placeholder-box" style="padding: 1.5mm 3mm;">
         <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot da tela 02 - Cadastro de Dataset (Schema mart) no Apache Superset]</div>
         <div class="ui-mockup">
             <div class="ui-mockup-topbar">
                 <span>New dataset · Add dataset to Superset</span>
                 <span style="color: #F3C65F;">Datasets ▸ + Dataset</span>
             </div>
-            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2.5mm;">
+            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2.5mm; padding: 2mm;">
                 <div class="ui-field">
                     <span class="ui-field-label">1. Database</span>
                     <div class="ui-field-input">MovideskDM</div>
@@ -1091,7 +1093,7 @@ code, .code-inline {
                     <div class="ui-field-input">mart</div>
                 </div>
                 <div class="ui-field">
-                    <span class="ui-field-label">3. Table / View</span>
+                    <span class="ui-field-label">3. Table / View (9 disponíveis)</span>
                     <div class="ui-field-input">vw_VisaoGeralKpis</div>
                 </div>
             </div>
@@ -1121,93 +1123,105 @@ code, .code-inline {
     <div class="chapter-header">
         <span class="chapter-badge">Capítulo 03</span>
         <div class="chapter-title-block">
-            <h2>Criação de Gráficos (Sala de Guerra &amp; Big Numbers)</h2>
-            <span>Tutorial Passo a Passo ("Mastigado") para Criar um Card Big Number Arrastando Métricas</span>
+            <h2>Criação de Gráficos (Dashboard - Movidesk BI)</h2>
+            <span>Tutorial Passo a Passo ("Mastigado") para Criar Big Numbers e Gráficos no Superset 6.1.0</span>
         </div>
     </div>
 
-    <p class="lead-text">
-        A <strong>Sala de Guerra</strong> tem no seu topo os indicadores executivos instantâneos (<em>Big Numbers</em>). Veja abaixo como criar passo a passo o cartão de <strong>Backlog Atual (Chamados em Aberto)</strong> arrastando a métrica da view <code>mart.vw_VisaoGeralKpis</code>:
+    <p class="lead-text" style="margin-bottom: 2.2mm;">
+        O <strong>Dashboard - Movidesk BI</strong> (<code>/superset/dashboard/dashboard-movidesk/</code>) combina 15 gráficos em 4 blocos com 3 filtros globais (<strong>Equipe</strong>, <strong>Serviço</strong> e <strong>Período</strong>). Veja como criar manualmente o cartão de <strong>Backlog Atual</strong> da view <code>mart.vw_VisaoGeralKpis</code>:
     </p>
 
-    <div class="steps-container">
+    <div class="steps-container compact" style="margin-bottom: 2.5mm;">
         <div class="step-row">
             <div class="step-circle">1</div>
             <div class="step-text">
-                <strong>Iniciar Novo Gráfico:</strong> No menu superior, clique em <strong>Charts</strong> → botão <strong><code>+ Chart</code></strong>. Em <em>Choose a dataset</em>, selecione <strong><code>vw_VisaoGeralKpis</code></strong>. Na galeria de tipos (<em>KPI</em>), clique em <strong><code>Big Number</code></strong> e depois no botão azul <strong><code>Create New Chart</code></strong>.
+                <strong>Iniciar Novo Gráfico:</strong> Em <strong>Charts</strong> → <strong><code>+ Chart</code></strong>, escolha <strong><code>vw_VisaoGeralKpis</code></strong>, selecione <strong><code>Big Number</code></strong> e clique em <strong><code>Create New Chart</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">2</div>
             <div class="step-text">
-                <strong>Arrastar a Métrica para o Campo METRIC:</strong> Na coluna esquerda da tela de edição (<em>Columns</em>), localize a coluna numérica <strong><code>BacklogAtual</code></strong>. Clique e <strong>arraste-a para dentro da caixa <code>METRIC</code></strong> (na aba central <em>DATA</em>). Na janelinha que abrir, na aba <em>SIMPLE</em>, confirme o agregador <strong><code>SUM (Soma)</code></strong> e clique em <strong><code>Save</code></strong>.
+                <strong>Arrastar Métrica:</strong> Em <em>Columns</em>, arraste <strong><code>BacklogAtual</code></strong> para <code>METRIC</code>, confirme o agregador <strong><code>SUM</code></strong> e clique em <strong><code>Save</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">3</div>
             <div class="step-text">
-                <strong>Definir Subtítulo e Formatação:</strong> No campo <strong><code>SUBHEADER</code></strong>, digite <code>Chamados Ativos na Fila</code>. Clique na aba <strong>CUSTOMIZE</strong> (ao lado de DATA) e em <strong>Number format</strong> selecione <code>,d</code> (exibe inteiro sem casas decimais). Clique em <strong><code>Update chart</code></strong> para ver o número gigante na tela!
+                <strong>Subtítulo e Formato:</strong> Em <strong><code>SUBHEADER</code></strong>, digite <code>Chamados Ativos na Fila</code>; em <strong>CUSTOMIZE</strong> selecione formato <code>,d</code> e clique em <strong><code>Update chart</code></strong>.
             </div>
         </div>
         <div class="step-row">
             <div class="step-circle">4</div>
             <div class="step-text">
-                <strong>Salvar no Dashboard:</strong> Clique no botão superior direito <strong><code>Save</code></strong>. Em <em>CHART NAME</em>, digite <code>KPI - Backlog Atual</code>. Em <em>ADD TO DASHBOARD</em>, digite/selecione <code>Sala de Guerra Movidesk</code> e clique em <strong><code>Save &amp; go to dashboard</code></strong>.
+                <strong>Salvar no Dashboard:</strong> Clique em <strong><code>Save</code></strong>, nomeie como <code>KPI - Backlog Atual</code>, associe a <code>Dashboard - Movidesk BI</code> e finalize em <strong><code>Save &amp; go to dashboard</code></strong>.
             </div>
         </div>
     </div>
 
-    <table class="zebra-table">
+    <table class="zebra-table compact" style="margin-bottom: 1.8mm; font-size: 7pt;">
         <thead>
             <tr>
-                <th style="width: 24%;">Gráfico da Sala de Guerra</th>
-                <th style="width: 23%;">Dataset (Schema mart)</th>
-                <th style="width: 20%;">Tipo no Superset</th>
-                <th>O que arrastar para Metric e Dimensions</th>
+                <th style="width: 21%; padding: 1.2mm 1.5mm;">Gráficos do Dashboard</th>
+                <th style="width: 22%; padding: 1.2mm 1.5mm;">Dataset (Schema mart)</th>
+                <th style="width: 15%; padding: 1.2mm 1.5mm;">Tipo Superset 6.1</th>
+                <th style="padding: 1.2mm 1.5mm;">Configuração Principal (X-Axis / Metrics / Dimensions)</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td><strong>1. Cards Topo (Backlog, SLA Vencido, Crítico &lt; 4h)</strong></td>
-                <td><code>vw_VisaoGeralKpis</code></td>
-                <td><code>Big Number</code></td>
-                <td><strong>Metric:</strong> <code>SUM(BacklogAtual)</code>, <code>SUM(SlaVencidos)</code>, <code>SUM(SlaIminente4h)</code> (1 card para cada).</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>1–6. Big Numbers Topo</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_VisaoGeralKpis</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>big_number_total</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>SUM(BacklogAtual)</code>, <code>SlaVencidos</code>, <code>SlaIminente4h</code>, <code>AbertosHoje</code>, <code>ResolvidosHoje</code>, <code>AVG(FcrUltimos30DiasPct)</code>.</td>
             </tr>
             <tr>
-                <td><strong>2. Evolução Diária da Fila (90 dias)</strong></td>
-                <td><code>vw_BacklogEvolucao</code></td>
-                <td><code>Time-series Area Chart</code></td>
-                <td><strong>Time Column:</strong> <code>DataSnapshot</code> | <strong>Metric:</strong> <code>SUM(QtdTickets)</code> e <code>SUM(QtdSlaVencido)</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>7. Radar Preditivo de SLA</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_SlaRadar</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>raw</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;">Ordenado por <code>OrdemGravidade ASC</code> e <code>MinutosParaVencer ASC</code> com Cliente e Serviço.</td>
             </tr>
             <tr>
-                <td><strong>3. Termômetro Preditivo de SLA (Fila Viva)</strong></td>
-                <td><code>vw_SlaRadar</code></td>
-                <td><code>Table</code></td>
-                <td><strong>Dimensions:</strong> <code>TicketId</code>, <code>Cliente</code>, <code>Assunto</code>, <code>Analista</code>, <code>FaixaRiscoSla</code>, <code>MinutosParaVencer</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>8. Evolução Backlog (90d)</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_BacklogEvolucao</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>echarts_area</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>X-Axis:</strong> <code>DataSnapshot</code> (P1D) | <strong>Metrics:</strong> <code>SUM(QtdTickets)</code> e <code>SUM(QtdSlaVencido)</code>.</td>
             </tr>
             <tr>
-                <td><strong>4. Gargalos por Status (Onde o ticket para)</strong></td>
-                <td><code>vw_StatusAging</code></td>
-                <td><code>Bar Chart</code> (Horizontal)</td>
-                <td><strong>Dimensions:</strong> <code>Status</code> | <strong>Metric:</strong> <code>AVG(HorasUteisMedias)</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>9. Throughput Diário</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_ThroughputDiario</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>echarts_timeseries_bar</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>X-Axis:</strong> <code>Data</code> (P1D) | <strong>Metrics:</strong> <code>SUM(Abertos)</code> e <code>SUM(Resolvidos)</code>.</td>
             </tr>
             <tr>
-                <td><strong>5. Radar de Clientes Silenciosos (Churn)</strong></td>
-                <td><code>vw_ClienteRaioX</code></td>
-                <td><code>Table</code></td>
-                <td><strong>Dimensions:</strong> <code>Cliente</code>, <code>StatusRelacionamento</code>, <code>DiasDesdeUltimoTicket</code>, <code>SlaCumpridoPct</code>.</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>10–12. Aging, Status e Demanda</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_BacklogAging</code>, <code>vw_StatusAging</code>, <code>vw_MapaDemanda</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>raw</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;">Faixas &gt;48h sem ação, gargalos (Horas Úteis/Corridas) e Pareto Serviço/Categoria/Versão.</td>
+            </tr>
+            <tr>
+                <td style="padding: 0.9mm 1.5mm;"><strong>13. Raio-X Empresas &amp; Churn</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_ClienteRaioX</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>table</code> (<em>aggregate</em>)</td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>Group By:</strong> <code>Cliente, Servico, Equipe, StatusRelacionamento, DataUltimoTicket</code> + <code>%Total</code>.</td>
+            </tr>
+            <tr>
+                <td style="padding: 0.9mm 1.5mm;"><strong>14–15. Clientes no Período</strong></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>vw_TicketsPorClientePeriodo</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><code>pie</code> + <code>table</code></td>
+                <td style="padding: 0.9mm 1.5mm;"><strong>Group By:</strong> <code>Cliente, Servico</code> | <strong>Metric:</strong> <code>SUM(QtdTickets)</code> | Filtro <code>DataAbertura</code> (Este mês).</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="screenshot-placeholder-box">
-        <div class="screenshot-placeholder-tag">[INSERIR IMAGEM AQUI: Screenshot da tela 03 - Construtor de Gráfico Big Number (Arrastando Métrica SUM(BacklogAtual))]</div>
+    <div class="screenshot-placeholder-box" style="padding: 1.2mm 2.5mm; margin-top: 1.2mm;">
+        <div class="screenshot-placeholder-tag" style="margin-bottom: 1mm;">[INSERIR IMAGEM AQUI: Tela 03 - Construtor Big Number (SUM(BacklogAtual))]</div>
         <div class="ui-mockup">
             <div class="ui-mockup-topbar">
                 <span>Chart Builder · Dataset: mart.vw_VisaoGeralKpis · Visualization: Big Number</span>
-                <span style="color: #F3C65F;">Botão: Save ▸ Sala de Guerra Movidesk</span>
+                <span style="color: #F3C65F;">Botão: Save ▸ Dashboard - Movidesk BI</span>
             </div>
-            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1.1fr 1.3fr 1.2fr; gap: 2.5mm; align-items: center;">
+            <div class="ui-mockup-body" style="display: grid; grid-template-columns: 1.1fr 1.3fr 1.2fr; gap: 2.5mm; align-items: center; padding: 1.4mm 2mm;">
                 <div class="ui-field">
                     <span class="ui-field-label">Colunas do Dataset (Arrastar)</span>
                     <div class="ui-field-input"># BacklogAtual  ───►</div>
@@ -1216,16 +1230,16 @@ code, .code-inline {
                 <div class="ui-field">
                     <span class="ui-field-label">Aba DATA ▸ Campo METRIC</span>
                     <div class="ui-field-input" style="border-left-color: #C59217;">SUM(BacklogAtual)</div>
-                    <span class="ui-field-label" style="margin-top: 1mm;">Campo SUBHEADER</span>
+                    <span class="ui-field-label" style="margin-top: 0.6mm;">Campo SUBHEADER</span>
                     <div class="ui-field-input">Chamados Ativos na Fila</div>
                 </div>
-                <div style="background: #0B3B52; color: #fff; border-radius: 1.2mm; padding: 2.5mm; text-align: center;">
-                    <div style="font-size: 16pt; font-weight: 800; color: #F3C65F;">142</div>
-                    <div style="font-size: 7pt;">Chamados Ativos na Fila</div>
+                <div style="background: #0B3B52; color: #fff; border-radius: 1.2mm; padding: 1.4mm; text-align: center;">
+                    <div style="font-size: 14pt; font-weight: 800; color: #F3C65F;">142</div>
+                    <div style="font-size: 6.8pt;">Chamados Ativos na Fila</div>
                 </div>
             </div>
         </div>
-        <div class="screenshot-caption">Figura 3.1 — Esquema visual do construtor Big Number no Superset arrastando BacklogAtual para a caixa METRIC.</div>
+        <div class="screenshot-caption" style="margin-top: 1mm;">Figura 3.1 — Esquema visual do construtor Big Number no Superset arrastando BacklogAtual para a caixa METRIC.</div>
     </div>
     
         </main>
@@ -1284,7 +1298,7 @@ code, .code-inline {
         <div class="step-row">
             <div class="step-circle">4</div>
             <div class="step-text">
-                <strong>Publicar o Dashboard (Published):</strong> Na tela do Dashboard <em>Sala de Guerra Movidesk</em>, certifique-se de que a tag ao lado do título está como <span class="badge-pill badge-green">Published</span> (e não <em>Draft</em>). Usuários <code>Gamma</code> só enxergam dashboards publicados!
+                <strong>Publicar o Dashboard (Published):</strong> Na tela do <em>Dashboard - Movidesk BI</em>, certifique-se de que a tag ao lado do título está como <span class="badge-pill badge-green">Published</span> (e não <em>Draft</em>). Usuários <code>Gamma</code> só enxergam dashboards publicados!
             </div>
         </div>
     </div>

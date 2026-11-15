@@ -94,11 +94,12 @@ jobs:
           name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} + Setup Automático Superset
           body: |
             ### Pacote Oficial Advice Compliance Solutions — Movidesk BI
-            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com **Configuração Inicial Automática do Apache Superset** embarcada na interface gráfica (Database `MovideskDM`, 9 Datasets `mart` e **Dashboard Movidesk**) e atualização automática do banco.
-            - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI.
-            - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset.
-            - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (12 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS` e Catálogo Definitivo das 8 Views `mart`).
-            - **`Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf`**: Manual Executivo de Leitura da Sala de Guerra — Dashboard Movidesk BI (8 páginas — Guia didático dos 15 componentes nos 4 blocos operacionais e CS).
+            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com **Configuração Inicial Automática do Apache Superset** nativa em C# embarcada (Database `MovideskDM`, 9 Datasets `mart`, **15 gráficos**, **3 filtros globais** e **Dashboard - Movidesk BI**) e migração automática do banco (`05`–`08`).
+            - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI (5 páginas).
+            - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset (6 páginas).
+            - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (13 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS`, Catálogo Definitivo das 9 Views `mart` e Índices Covering).
+            - **`Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf`**: Manual Executivo de Leitura da Sala de Guerra — Dashboard - Movidesk BI (8 páginas — Guia didático dos 15 componentes nos 4 blocos operacionais e CS).
+            - **`Historico_Passo_a_Passo_Projeto.md`**: Memória cronológica passo a passo de todas as entregas e correções do projeto.
           files: |
             MovideskControlPanel-win-x64.zip
             docs/manuais/Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf
@@ -106,5 +107,6 @@ jobs:
             docs/manuais/Manual_03_Dicionario_de_Dados_Completo.pdf
             docs/manuais/Manual_03_Dicionario_de_Dados_MovideskDM.pdf
             docs/manuais/Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf
+            docs/manuais/Historico_Passo_a_Passo_Projeto.md
           prerelease: false
           make_latest: true
