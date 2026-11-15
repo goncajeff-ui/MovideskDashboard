@@ -103,11 +103,11 @@ public sealed class MovideskIngestionService : IDisposable
     }
 
     /// <summary>
-    /// Valida no banco MovideskDM se as Procedures (usp_AtualizarSnapshotBacklog,
+    /// Valida no banco MovideskDM se Dim_Status encerrados, as Procedures (usp_AtualizarSnapshotBacklog,
     /// usp_ProcessarPessoas, usp_ProcessarTickets), o dicionário Dim_CampoCustomizado e todas as
-    /// 8 Views mart.* (incluindo coluna 'Equipe' para filtro global e 'Servico') estão presentes.
-    /// Só aplica os scripts SQL embutidos se algum objeto ou coluna obrigatória estiver ausente/desatualizada,
-    /// preservando quaisquer ALTER VIEW executados diretamente via SSMS.
+    /// 9 Views mart.* (incluindo coluna 'Equipe' para filtro global, 'Servico' e vw_TicketsPorClientePeriodo)
+    /// estão presentes e corrigidas. Só aplica os scripts SQL embutidos se algum objeto ou regra
+    /// obrigatória estiver ausente/desatualizada, preservando customizações manuais posteriores via SSMS.
     /// </summary>
     public async Task GarantirObjetosBancoAtualizadosAsync(CancellationToken ct = default)
     {
@@ -140,6 +140,24 @@ public sealed class MovideskIngestionService : IDisposable
                 await cmdCampos.ExecuteNonQueryAsync(ct);
             }
 
+            // 1b. Garante EhFinal = 1 e PausaSla = 1 para Status Encerrados (incl. Resolvido)
+            const string sqlFixStatus = @"
+                UPDATE core.Dim_Status
+                SET EhFinal = 1,
+                    PausaSla = 1
+                WHERE (Nome IN (N'Resolvido', N'Fechado', N'Cancelado') OR GrupoStatus = N'Encerrado')
+                  AND (ISNULL(EhFinal, 0) <> 1 OR ISNULL(PausaSla, 0) <> 1);";
+
+            int statusCorrigidos;
+            await using (var cmdFixStatus = new SqlCommand(sqlFixStatus, conn) { CommandTimeout = 30 })
+            {
+                statusCorrigidos = await cmdFixStatus.ExecuteNonQueryAsync(ct);
+            }
+            if (statusCorrigidos > 0)
+            {
+                AppendLog($"[INF] Corrigidos {statusCorrigidos} status encerrados em core.Dim_Status (EhFinal = 1, PausaSla = 1).");
+            }
+
             // 2. Verifica Procedures no schema core antes de aplicar 04_procedure_processamento.sql
             const string sqlCheckProcs = @"
                 SELECT
@@ -163,7 +181,8 @@ public sealed class MovideskIngestionService : IDisposable
             }
 
             bool precisaAtualizarProcs =
-                !procDefs.ContainsKey("usp_AtualizarSnapshotBacklog") ||
+                !procDefs.TryGetValue("usp_AtualizarSnapshotBacklog", out var snapProcDef) ||
+                !snapProcDef.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
                 !procDefs.ContainsKey("usp_ProcessarPessoas") ||
                 !procDefs.TryGetValue("usp_ProcessarTickets", out var ticketsProcDef) ||
                 !ticketsProcDef.Contains("E. South America Standard Time", StringComparison.OrdinalIgnoreCase) ||
@@ -175,8 +194,15 @@ public sealed class MovideskIngestionService : IDisposable
                 await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.04_procedure_processamento.sql", ct);
             }
 
-            // 3. Verifica todas as 8 Views no schema mart + colunas obrigatórias ('Equipe' e 'Servico')
+            // 3. Verifica todas as 9 Views no schema mart + colunas obrigatórias + correção Backlog/SLA
             const string sqlCheckViews = @"
+                SELECT
+                    v.name AS ViewName,
+                    OBJECT_DEFINITION(v.object_id) AS Definicao
+                FROM sys.views v
+                INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+                WHERE s.name = 'mart';
+
                 SELECT
                     v.name AS ViewName,
                     c.name AS ColumnName
@@ -185,6 +211,7 @@ public sealed class MovideskIngestionService : IDisposable
                 LEFT JOIN sys.columns c ON v.object_id = c.object_id
                 WHERE s.name = 'mart';";
 
+            var viewDefs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var viewColumns = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             await using (var cmdCheckViews = new SqlCommand(sqlCheckViews, conn) { CommandTimeout = 30 })
             await using (var readerViews = await cmdCheckViews.ExecuteReaderAsync(ct))
@@ -192,14 +219,24 @@ public sealed class MovideskIngestionService : IDisposable
                 while (await readerViews.ReadAsync(ct))
                 {
                     string viewName = readerViews.GetString(0);
-                    if (!viewColumns.TryGetValue(viewName, out var cols))
+                    string def = readerViews.IsDBNull(1) ? string.Empty : readerViews.GetString(1);
+                    viewDefs[viewName] = def;
+                }
+
+                if (await readerViews.NextResultAsync(ct))
+                {
+                    while (await readerViews.ReadAsync(ct))
                     {
-                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        viewColumns[viewName] = cols;
-                    }
-                    if (!readerViews.IsDBNull(1))
-                    {
-                        cols.Add(readerViews.GetString(1));
+                        string viewName = readerViews.GetString(0);
+                        if (!viewColumns.TryGetValue(viewName, out var cols))
+                        {
+                            cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            viewColumns[viewName] = cols;
+                        }
+                        if (!readerViews.IsDBNull(1))
+                        {
+                            cols.Add(readerViews.GetString(1));
+                        }
                     }
                 }
             }
@@ -213,33 +250,44 @@ public sealed class MovideskIngestionService : IDisposable
                 ["vw_ThroughputDiario"] = ["Equipe"],
                 ["vw_ClienteRaioX"] = ["Equipe"],
                 ["vw_MapaDemanda"] = ["Equipe", "Servico"],
-                ["vw_BacklogEvolucao"] = ["Equipe"]
+                ["vw_BacklogEvolucao"] = ["Equipe"],
+                ["vw_TicketsPorClientePeriodo"] = ["Equipe", "Cliente", "DataAbertura"]
             };
 
-            bool precisaAtualizarViews = false;
-            foreach (var (viewName, reqCols) in viewsObrigatorias)
-            {
-                if (!viewColumns.TryGetValue(viewName, out var existingCols))
-                {
-                    precisaAtualizarViews = true;
-                    break;
-                }
+            bool precisaAtualizarViews =
+                !viewDefs.TryGetValue("vw_VisaoGeralKpis", out var defKpis) ||
+                defKpis.Contains("ISNULL(st.EhFinal, CASE", StringComparison.OrdinalIgnoreCase) ||
+                !defKpis.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
+                !viewDefs.TryGetValue("vw_SlaRadar", out var defRadar) ||
+                defRadar.Contains("ISNULL(st.EhFinal, CASE", StringComparison.OrdinalIgnoreCase) ||
+                !defRadar.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase);
 
-                foreach (string reqCol in reqCols)
+            if (!precisaAtualizarViews)
+            {
+                foreach (var (viewName, reqCols) in viewsObrigatorias)
                 {
-                    if (!existingCols.Contains(reqCol))
+                    if (!viewColumns.TryGetValue(viewName, out var existingCols))
                     {
                         precisaAtualizarViews = true;
                         break;
                     }
-                }
 
-                if (precisaAtualizarViews) break;
+                    foreach (string reqCol in reqCols)
+                    {
+                        if (!existingCols.Contains(reqCol))
+                        {
+                            precisaAtualizarViews = true;
+                            break;
+                        }
+                    }
+
+                    if (precisaAtualizarViews) break;
+                }
             }
 
             if (precisaAtualizarViews)
             {
-                AppendLog("[INF] Views faltantes ou sem coluna 'Equipe'/'Servico' detectadas. Sincronizando 03_views_kpis.sql...");
+                AppendLog("[INF] Atualizando as 9 views do schema mart (correção Backlog/SLA, filtro 'Equipe' e vw_TicketsPorClientePeriodo)...");
                 await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.03_views_kpis.sql", ct);
             }
 
@@ -277,15 +325,24 @@ public sealed class MovideskIngestionService : IDisposable
                     await cmdSnap.ExecuteNonQueryAsync(ct);
                 }
 
-                AppendLog("[OK] Procedures, 8 Views (todas com filtro Equipe), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
+                AppendLog("[OK] Procedures, 9 Views (todas com filtro Equipe), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
             }
-            else if (precisaAtualizarViews || precisaAtualizarProcs)
+            else if (totalRaw > 0 && (statusCorrigidos > 0 || precisaAtualizarProcs || precisaAtualizarViews))
             {
-                AppendLog("[OK] Procedures e as 8 Views mart.* (com filtro Equipe em todas) sincronizadas no MovideskDM.");
+                AppendLog("[INF] Reconstruindo Snapshot Diário do Backlog com as regras corrigidas de Resolvido e SLA Pausado...");
+                await using (var cmdSnap = new SqlCommand("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;", conn) { CommandTimeout = 300 })
+                {
+                    await cmdSnap.ExecuteNonQueryAsync(ct);
+                }
+                AppendLog("[OK] Status, Procedures, Snapshot 90d e as 9 Views mart.* sincronizados com sucesso no MovideskDM!");
+            }
+            else if (precisaAtualizarViews || precisaAtualizarProcs || statusCorrigidos > 0)
+            {
+                AppendLog("[OK] Procedures e as 9 Views mart.* (com filtro Equipe em todas) sincronizadas no MovideskDM.");
             }
             else
             {
-                AppendLog("[OK] 8 Views mart.* validadas com filtro 'Equipe' e Procedures íntegras (definições preservadas).");
+                AppendLog("[OK] 9 Views mart.* validadas com filtro 'Equipe' e regras de Backlog/SLA íntegras.");
             }
 
             _objetosBancoVerificados = true;

@@ -31,7 +31,14 @@ Base AS (
         t.SlaSolucaoPausado,
         t.ResolvidoPrimeiroContato,
         ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
-        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal,
+        CASE
+            WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+            ELSE ISNULL(st.EhFinal, 0)
+        END AS EhFinal,
+        CASE
+            WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 1
+            ELSE 0
+        END AS SlaPausadoEfetivo,
         ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
         p.MinutosSlaIminente
     FROM core.Fato_Ticket t
@@ -40,14 +47,14 @@ Base AS (
 )
 SELECT 
     b.Equipe,
-    -- Backlog Atual
+    -- Backlog Atual (desconsidera Resolvido/Fechado/Cancelado)
     COUNT(CASE WHEN b.EhFinal = 0 THEN 1 END) AS BacklogAtual,
-    -- SLA Vencido (abertos cujo prazo já expirou)
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao < SYSDATETIME() AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaVencidos,
+    -- SLA Vencido (abertos cujo prazo já expirou e cujo SLA não está pausado)
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao < SYSDATETIME() AND b.SlaPausadoEfetivo = 0 THEN 1 END) AS SlaVencidos,
     -- SLA Iminente (parametrizado via ctl.Parametro: padrão <= 4 horas / 240 min)
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao >= SYSDATETIME() AND DATEDIFF(MINUTE, SYSDATETIME(), b.SlaDataSolucao) <= b.MinutosSlaIminente AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaIminente4h,
-    -- SLA Pausado (aguardando cliente/versão)
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaSolucaoPausado = 1 THEN 1 END) AS SlaPausados,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao >= SYSDATETIME() AND DATEDIFF(MINUTE, SYSDATETIME(), b.SlaDataSolucao) <= b.MinutosSlaIminente AND b.SlaPausadoEfetivo = 0 THEN 1 END) AS SlaIminente4h,
+    -- SLA Pausado (aguardando cliente/status pausado)
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaPausadoEfetivo = 1 THEN 1 END) AS SlaPausados,
     -- Dependência de Terceiros / Dev
     COUNT(CASE WHEN b.EhFinal = 0 AND b.EhDependenciaTerceiro = 1 THEN 1 END) AS EmDependenciaDev,
     -- Abertos Hoje
@@ -86,9 +93,9 @@ SELECT
     t.DataUltimaAcao,
     t.SlaAcordo,
     t.SlaDataSolucao,
-    t.SlaSolucaoPausado,
+    CAST(CASE WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 1 ELSE 0 END AS BIT) AS SlaSolucaoPausado,
     CASE 
-        WHEN t.SlaSolucaoPausado = 1 THEN 'SLA Pausado'
+        WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 'SLA Pausado'
         WHEN t.SlaDataSolucao IS NULL THEN 'Sem SLA Definido'
         WHEN t.SlaDataSolucao < SYSDATETIME() THEN 'Vencido'
         WHEN DATEDIFF(MINUTE, SYSDATETIME(), t.SlaDataSolucao) <= 120 THEN 'Crítico (< 2h)'
@@ -97,7 +104,7 @@ SELECT
         ELSE 'No Prazo (> 8h)'
     END AS FaixaRiscoSla,
     CASE 
-        WHEN t.SlaSolucaoPausado = 1 THEN 5
+        WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 5
         WHEN t.SlaDataSolucao IS NULL THEN 6
         WHEN t.SlaDataSolucao < SYSDATETIME() THEN 1
         WHEN DATEDIFF(MINUTE, SYSDATETIME(), t.SlaDataSolucao) <= 120 THEN 2
@@ -113,7 +120,10 @@ LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
-WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
+WHERE CASE
+          WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+          ELSE ISNULL(st.EhFinal, 0)
+      END = 0;
 GO
 
 /* ----------------------------------------------------------------------------
@@ -158,7 +168,10 @@ LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
-WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
+WHERE CASE
+          WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+          ELSE ISNULL(st.EhFinal, 0)
+      END = 0;
 GO
 
 /* ----------------------------------------------------------------------------
@@ -177,7 +190,7 @@ WITH Passagens AS (
             sh.PermanenciaMinCorridos,
             CASE
                 WHEN sh.DataFim IS NULL
-                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0
                      AND sh.DataInicio < SYSDATETIME()
                 THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
             END
@@ -186,7 +199,7 @@ WITH Passagens AS (
             sh.PermanenciaMinUteis,
             CASE
                 WHEN sh.DataFim IS NULL
-                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0
                      AND sh.DataInicio < SYSDATETIME()
                 THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
             END
@@ -283,7 +296,7 @@ SELECT
     c.RazaoSocial,
     ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     COUNT(t.TicketId) AS TotalTicketsHistorico,
-    COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
+    COUNT(CASE WHEN t.TicketId IS NOT NULL AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
     COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
     CAST(ROUND(100.0 * COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) 
         / NULLIF(COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
@@ -320,7 +333,7 @@ SELECT
     t.Urgencia,
     ISNULL(cf.Valor, N'Não Informada') AS VersaoProduto,
     COUNT(1) AS Volumetria,
-    COUNT(CASE WHEN ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS Abertos,
+    COUNT(CASE WHEN CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS Abertos,
     CAST(ROUND(AVG(DATEDIFF(HOUR, t.DataCriacao, ISNULL(t.DataResolucao, SYSDATETIME()))), 1) AS DECIMAL(10,1)) AS HorasMediasResolucao
 FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
@@ -358,4 +371,38 @@ FROM core.Fato_SnapshotBacklog sb
 LEFT JOIN core.Dim_Calendario cal ON sb.DataSnapshot = cal.Data
 LEFT JOIN core.Dim_Status st ON sb.Status = st.Nome
 LEFT JOIN core.Dim_Agente ag ON sb.AgenteId = ag.AgenteId;
+GO
+
+/* ----------------------------------------------------------------------------
+   9. mart.vw_TicketsPorClientePeriodo (Distribuição de Tickets por Cliente no Período)
+      Alimenta o gráfico Donut e o Grid detalhado de Tickets Abertos por Cliente/Equipe
+---------------------------------------------------------------------------- */
+CREATE OR ALTER VIEW mart.vw_TicketsPorClientePeriodo
+AS
+SELECT
+    t.TicketId,
+    t.Protocolo,
+    t.DataCriacao AS DataAbertura,
+    CAST(t.DataCriacao AS DATE) AS DataAberturaDia,
+    CONVERT(CHAR(7), t.DataCriacao, 126) AS AnoMes,
+    ISNULL(emp.ClienteId, ISNULL(cli.ClienteId, ISNULL(t.EmpresaId, 'NAO_IDENTIFICADO'))) AS ClienteId,
+    ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+    ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
+    t.Status,
+    t.StatusBase,
+    CASE
+        WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') OR ISNULL(st.EhFinal, 0) = 1 THEN N'Encerrado'
+        ELSE N'Em Aberto'
+    END AS Situacao,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+    t.Categoria,
+    t.Urgencia,
+    1 AS QtdTickets
+FROM core.Fato_Ticket t
+LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
+LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
+LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
+WHERE t.DataCriacao IS NOT NULL;
 GO

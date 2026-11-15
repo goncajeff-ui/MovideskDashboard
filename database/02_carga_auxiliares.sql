@@ -15,7 +15,7 @@ USING (VALUES
     (N'Aguardando Retorno do cliente',    N'Aguardando Cliente',              3, 1, 0, 0, '#95a5a6'),
     (N'Aguardando desenvolvimento',       N'Dependência Dev (Ticket Filho)',  4, 0, 1, 0, '#e74c3c'),
     (N'Aguardando liberação de Versão',   N'Dependência Release/Versão',      5, 0, 1, 0, '#9b59b6'),
-    (N'Resolvido',                        N'Resolvido (Aguardando Fechamento)',6, 1, 0, 0, '#2ecc71'),
+    (N'Resolvido',                        N'Resolvido (Aguardando Fechamento)',6, 1, 0, 1, '#2ecc71'),
     (N'Fechado',                          N'Encerrado',                       7, 1, 0, 1, '#27ae60'),
     (N'Cancelado',                        N'Cancelado',                       8, 1, 0, 1, '#7f8c8d')
 ) AS S (Nome, GrupoStatus, OrdemFluxo, PausaSla, EhDependenciaTerceiro, EhFinal, Cor)

@@ -7,7 +7,7 @@
 Executa silenciosamente via REST API do Apache Superset (http://localhost:8088):
   1. Cria/atualiza a conexão de banco de dados MSSQL `MovideskDM`
      (mssql+pymssql://sa:123456@172.29.112.1:1433/MovideskDM).
-  2. Registra e sincroniza os 8 Datasets oficiais do schema `mart`:
+  2. Registra e sincroniza os 9 Datasets oficiais do schema `mart`:
      - vw_VisaoGeralKpis
      - vw_SlaRadar
      - vw_BacklogAging
@@ -16,8 +16,9 @@ Executa silenciosamente via REST API do Apache Superset (http://localhost:8088):
      - vw_ThroughputDiario
      - vw_ClienteRaioX
      - vw_MapaDemanda
-  3. Constrói os gráficos essenciais e publica o Dashboard "Sala de Guerra - Movidesk BI"
-     (/superset/dashboard/sala-de-guerra-movidesk/) com auto-refresh de 60s.
+     - vw_TicketsPorClientePeriodo
+  3. Constrói os gráficos essenciais e publica o Dashboard "Dashboard - Movidesk BI"
+     (/superset/dashboard/dashboard-movidesk/) com auto-refresh de 60s.
 
 Zero dependências externas (usa apenas biblioteca padrão do Python 3).
 ===============================================================================
@@ -57,6 +58,7 @@ MART_VIEWS: List[Tuple[str, Optional[str], str]] = [
     ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
     ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes, % SLA e Risco de Churn (> 60d)"),
     ("vw_MapaDemanda", None, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
+    ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período"),
 ]
 
 
@@ -80,7 +82,8 @@ class SupersetApiClient:
         path: str,
         payload: Optional[Dict[str, Any]] = None,
         query_params: Optional[Dict[str, str]] = None,
-        timeout: int = 30,
+        timeout: int = 120,
+        max_retries: int = 1,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         if query_params:
@@ -101,20 +104,34 @@ class SupersetApiClient:
         if self.csrf_token and method.upper() in ("POST", "PUT", "DELETE", "PATCH"):
             headers["X-CSRFToken"] = self.csrf_token
 
-        req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
-        try:
-            with self.opener.open(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-                return json.loads(raw) if raw.strip() else {}
-        except urllib.error.HTTPError as exc:
-            err_body = ""
+        for attempt in range(max_retries + 1):
+            req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
             try:
-                err_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"HTTP {exc.code} em {method.upper()} {path}: {err_body or exc.reason}"
-            ) from exc
+                with self.opener.open(req, timeout=timeout) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                    return json.loads(raw) if raw.strip() else {}
+            except urllib.error.HTTPError as exc:
+                err_body = ""
+                try:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"HTTP {exc.code} em {method.upper()} {path}: {err_body or exc.reason}"
+                ) from exc
+            except (urllib.error.URLError, TimeoutError, socket.timeout) as net_exc:
+                if attempt < max_retries:
+                    print(
+                        f"[AVISO] Tempo limite/comunicação em {method.upper()} {path} ({net_exc}). Nova tentativa em 3s...",
+                        flush=True,
+                    )
+                    time.sleep(3)
+                    continue
+                raise RuntimeError(
+                    f"Tempo limite ou erro de comunicação em {method.upper()} {path}: {net_exc}"
+                ) from net_exc
+
+        return {}
 
     def authenticate(self) -> None:
         try:
@@ -291,9 +308,9 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
 
 def ensure_sql_views_updated(db_uri: str) -> None:
     """
-    Se pymssql estiver disponível (padrão na venv ~/superset-env), verifica se todas as 8 views
-    do schema 'mart' já existem com a coluna normalizada `Equipe` (e `Servico` nas views de demanda/radar).
-    Só aplica CREATE OR ALTER VIEW nas views ausentes ou incompletas para não sobrescrever customizações do usuário.
+    Se pymssql estiver disponível (padrão na venv ~/superset-env), verifica se Dim_Status,
+    usp_AtualizarSnapshotBacklog e todas as 9 views do schema 'mart' já possuem a coluna
+    normalizada `Equipe` e a correção definitiva de Backlog Atual / SLA Vencidos.
     """
     try:
         import pymssql  # type: ignore
@@ -315,6 +332,163 @@ def ensure_sql_views_updated(db_uri: str) -> None:
             autocommit=True,
         )
         cur = conn.cursor()
+
+        # 1. Garante EhFinal = 1 e PausaSla = 1 em core.Dim_Status para status encerrados
+        cur.execute(
+            """
+            UPDATE core.Dim_Status
+            SET EhFinal = 1,
+                PausaSla = 1
+            WHERE (Nome IN (N'Resolvido', N'Fechado', N'Cancelado') OR GrupoStatus = N'Encerrado')
+              AND (ISNULL(EhFinal, 0) <> 1 OR ISNULL(PausaSla, 0) <> 1);
+            """
+        )
+        status_fixed = cur.rowcount or 0
+
+        # 2. Garante procedure core.usp_AtualizarSnapshotBacklog corrigida (st.PausaSla + StatusBase)
+        cur.execute(
+            """
+            SELECT OBJECT_DEFINITION(p.object_id)
+            FROM sys.procedures p
+            INNER JOIN sys.schemas s ON p.schema_id = s.schema_id
+            WHERE s.name = 'core' AND p.name = 'usp_AtualizarSnapshotBacklog';
+            """
+        )
+        row_proc = cur.fetchone()
+        snap_proc_def = (row_proc[0] or "") if row_proc else ""
+        proc_updated = False
+        if "st.PausaSla" not in snap_proc_def:
+            cur.execute(
+                """
+CREATE OR ALTER PROCEDURE core.usp_AtualizarSnapshotBacklog
+    @DiasRetroativos INT = 90,
+    @ReconstruirHistorico BIT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @Hoje DATE = CAST(SYSDATETIME() AS DATE);
+    DECLARE @DataInicial DATE = DATEADD(DAY, -ISNULL(@DiasRetroativos, 90), @Hoje);
+
+    DECLARE @DiasExistentes INT = (
+        SELECT COUNT(DISTINCT DataSnapshot)
+        FROM core.Fato_SnapshotBacklog
+        WHERE DataSnapshot >= @DataInicial AND DataSnapshot < @Hoje
+    );
+
+    IF @ReconstruirHistorico = 1 OR @DiasExistentes < (@DiasRetroativos / 2)
+    BEGIN
+        DELETE FROM core.Fato_SnapshotBacklog
+        WHERE DataSnapshot >= @DataInicial AND DataSnapshot < @Hoje;
+
+        ;WITH Datas AS (
+            SELECT Data
+            FROM core.Dim_Calendario
+            WHERE Data >= @DataInicial AND Data < @Hoje
+        ),
+        TicketsAbertosNoDia AS (
+            SELECT
+                d.Data AS DataSnapshot,
+                ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+                ISNULL(t.AgenteId, 'NAO_ATRIBUIDO') AS AgenteId,
+                ISNULL(sh.StatusNoDia, ISNULL(t.Status, N'Em atendimento')) AS Status,
+                ISNULL(t.Urgencia, N'Não Informada') AS Urgencia,
+                CASE
+                    WHEN t.SlaDataSolucao IS NOT NULL
+                         AND t.SlaDataSolucao < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+                         AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+                         AND ISNULL(st.PausaSla, 0) = 0
+                    THEN 1 ELSE 0
+                END AS SlaVencidoNoDia
+            FROM Datas d
+            INNER JOIN core.Fato_Ticket t
+                ON t.DataCriacao < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+               AND (t.DataResolucao IS NULL OR t.DataResolucao >= DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0))))
+               AND (t.DataFechamento IS NULL OR t.DataFechamento >= DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0))))
+            OUTER APPLY (
+                SELECT TOP 1 h.Status AS StatusNoDia
+                FROM core.Fato_StatusHistorico h
+                WHERE h.TicketId = t.TicketId
+                  AND h.DataInicio < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
+                ORDER BY h.DataInicio DESC, h.Sequencia DESC
+            ) sh
+            LEFT JOIN core.Dim_Status st
+                ON ISNULL(sh.StatusNoDia, t.Status) = st.Nome
+            WHERE CASE
+                      WHEN st.EhFinal = 1 THEN 1
+                      WHEN sh.StatusNoDia IS NULL AND t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+                      WHEN sh.StatusNoDia IN (N'Resolvido', N'Fechado', N'Cancelado') THEN 1
+                      ELSE 0
+                  END = 0
+        )
+        INSERT INTO core.Fato_SnapshotBacklog (
+            DataSnapshot, Equipe, AgenteId, Status, Urgencia, QtdTickets, QtdSlaVencido
+        )
+        SELECT
+            DataSnapshot,
+            Equipe,
+            AgenteId,
+            Status,
+            Urgencia,
+            COUNT(1) AS QtdTickets,
+            SUM(SlaVencidoNoDia) AS QtdSlaVencido
+        FROM TicketsAbertosNoDia
+        GROUP BY DataSnapshot, Equipe, AgenteId, Status, Urgencia;
+    END
+
+    DELETE FROM core.Fato_SnapshotBacklog
+    WHERE DataSnapshot = @Hoje;
+
+    INSERT INTO core.Fato_SnapshotBacklog (
+        DataSnapshot, Equipe, AgenteId, Status, Urgencia, QtdTickets, QtdSlaVencido
+    )
+    SELECT
+        @Hoje AS DataSnapshot,
+        ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(t.AgenteId, 'NAO_ATRIBUIDO') AS AgenteId,
+        ISNULL(t.Status, N'Novo') AS Status,
+        ISNULL(t.Urgencia, N'Não Informada') AS Urgencia,
+        COUNT(1) AS QtdTickets,
+        COUNT(CASE
+            WHEN t.SlaDataSolucao IS NOT NULL
+                 AND t.SlaDataSolucao < SYSDATETIME()
+                 AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+                 AND ISNULL(st.PausaSla, 0) = 0
+            THEN 1
+        END) AS QtdSlaVencido
+    FROM core.Fato_Ticket t
+    LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+    WHERE CASE
+              WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+              ELSE ISNULL(st.EhFinal, 0)
+          END = 0
+    GROUP BY
+        ISNULL(t.Equipe, N'Sem Equipe'),
+        ISNULL(t.AgenteId, 'NAO_ATRIBUIDO'),
+        ISNULL(t.Status, N'Novo'),
+        ISNULL(t.Urgencia, N'Não Informada');
+END;
+                """
+            )
+            proc_updated = True
+
+        # 3. Verifica definições e colunas das 9 views no schema mart
+        cur.execute(
+            """
+            SELECT v.name, OBJECT_DEFINITION(v.object_id)
+            FROM sys.views v
+            INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+            WHERE s.name = 'mart';
+            """
+        )
+        view_defs: Dict[str, str] = {}
+        for row in cur.fetchall():
+            v_name = (row[0] or "").lower()
+            v_def = row[1] or ""
+            if v_name:
+                view_defs[v_name] = v_def
+
         cur.execute(
             """
             SELECT v.name, c.name
@@ -342,18 +516,21 @@ def ensure_sql_views_updated(db_uri: str) -> None:
             "vw_clienteraiox": {"equipe"},
             "vw_mapademanda": {"equipe", "servico"},
             "vw_backlogevolucao": {"equipe"},
+            "vw_ticketsporclienteperiodo": {"equipe", "cliente", "dataabertura"},
         }
 
-        missing_views = [
-            v
-            for v, req in required_view_cols.items()
-            if v not in view_cols or not req.issubset(view_cols[v])
-        ]
+        views_to_update: List[str] = []
+        for v, req in required_view_cols.items():
+            v_def_lower = view_defs.get(v, "").lower()
+            has_old_ehfinal = "isnull(st.ehfinal, case" in v_def_lower
+            missing_pausa = v in ("vw_visaogeralkpis", "vw_slaradar") and "st.pausasla" not in v_def_lower
+            if v not in view_cols or not req.issubset(view_cols[v]) or has_old_ehfinal or missing_pausa:
+                views_to_update.append(v)
 
-        if not missing_views:
+        if not views_to_update and not proc_updated and status_fixed == 0:
             conn.close()
             print(
-                "[OK] Todas as 8 Views do schema 'mart' já possuem a coluna 'Equipe' (filtro global preservado).",
+                "[OK] Todas as 9 Views do schema 'mart' validadas com filtro 'Equipe' e regras Backlog/SLA íntegras.",
                 flush=True,
             )
             return
@@ -380,7 +557,14 @@ Base AS (
         t.SlaSolucaoPausado,
         t.ResolvidoPrimeiroContato,
         ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
-        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal,
+        CASE
+            WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+            ELSE ISNULL(st.EhFinal, 0)
+        END AS EhFinal,
+        CASE
+            WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 1
+            ELSE 0
+        END AS SlaPausadoEfetivo,
         ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
         p.MinutosSlaIminente
     FROM core.Fato_Ticket t
@@ -390,9 +574,9 @@ Base AS (
 SELECT 
     b.Equipe,
     COUNT(CASE WHEN b.EhFinal = 0 THEN 1 END) AS BacklogAtual,
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao < SYSDATETIME() AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaVencidos,
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao >= SYSDATETIME() AND DATEDIFF(MINUTE, SYSDATETIME(), b.SlaDataSolucao) <= b.MinutosSlaIminente AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaIminente4h,
-    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaSolucaoPausado = 1 THEN 1 END) AS SlaPausados,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao < SYSDATETIME() AND b.SlaPausadoEfetivo = 0 THEN 1 END) AS SlaVencidos,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao >= SYSDATETIME() AND DATEDIFF(MINUTE, SYSDATETIME(), b.SlaDataSolucao) <= b.MinutosSlaIminente AND b.SlaPausadoEfetivo = 0 THEN 1 END) AS SlaIminente4h,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaPausadoEfetivo = 1 THEN 1 END) AS SlaPausados,
     COUNT(CASE WHEN b.EhFinal = 0 AND b.EhDependenciaTerceiro = 1 THEN 1 END) AS EmDependenciaDev,
     COUNT(CASE WHEN CAST(b.DataCriacao AS DATE) = CAST(SYSDATETIME() AS DATE) THEN 1 END) AS AbertosHoje,
     COUNT(CASE WHEN CAST(b.DataResolucao AS DATE) = CAST(SYSDATETIME() AS DATE) THEN 1 END) AS ResolvidosHoje,
@@ -423,9 +607,9 @@ SELECT
     t.DataUltimaAcao,
     t.SlaAcordo,
     t.SlaDataSolucao,
-    t.SlaSolucaoPausado,
+    CAST(CASE WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 1 ELSE 0 END AS BIT) AS SlaSolucaoPausado,
     CASE 
-        WHEN t.SlaSolucaoPausado = 1 THEN 'SLA Pausado'
+        WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 'SLA Pausado'
         WHEN t.SlaDataSolucao IS NULL THEN 'Sem SLA Definido'
         WHEN t.SlaDataSolucao < SYSDATETIME() THEN 'Vencido'
         WHEN DATEDIFF(MINUTE, SYSDATETIME(), t.SlaDataSolucao) <= 120 THEN 'Crítico (< 2h)'
@@ -434,7 +618,7 @@ SELECT
         ELSE 'No Prazo (> 8h)'
     END AS FaixaRiscoSla,
     CASE 
-        WHEN t.SlaSolucaoPausado = 1 THEN 5
+        WHEN ISNULL(t.SlaSolucaoPausado, 0) = 1 OR ISNULL(st.PausaSla, 0) = 1 THEN 5
         WHEN t.SlaDataSolucao IS NULL THEN 6
         WHEN t.SlaDataSolucao < SYSDATETIME() THEN 1
         WHEN DATEDIFF(MINUTE, SYSDATETIME(), t.SlaDataSolucao) <= 120 THEN 2
@@ -450,7 +634,10 @@ LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
-WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
+WHERE CASE
+          WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+          ELSE ISNULL(st.EhFinal, 0)
+      END = 0;
 """,
             "vw_backlogaging": """
 CREATE OR ALTER VIEW mart.vw_BacklogAging
@@ -491,7 +678,10 @@ LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
 LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
-WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
+WHERE CASE
+          WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+          ELSE ISNULL(st.EhFinal, 0)
+      END = 0;
 """,
             "vw_statusaging": """
 CREATE OR ALTER VIEW mart.vw_StatusAging
@@ -506,7 +696,7 @@ WITH Passagens AS (
             sh.PermanenciaMinCorridos,
             CASE
                 WHEN sh.DataFim IS NULL
-                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0
                      AND sh.DataInicio < SYSDATETIME()
                 THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
             END
@@ -515,7 +705,7 @@ WITH Passagens AS (
             sh.PermanenciaMinUteis,
             CASE
                 WHEN sh.DataFim IS NULL
-                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0
                      AND sh.DataInicio < SYSDATETIME()
                 THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
             END
@@ -606,7 +796,7 @@ SELECT
     c.RazaoSocial,
     ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     COUNT(t.TicketId) AS TotalTicketsHistorico,
-    COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
+    COUNT(CASE WHEN t.TicketId IS NOT NULL AND CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
     COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
     CAST(ROUND(100.0 * COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) 
         / NULLIF(COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
@@ -640,7 +830,7 @@ SELECT
     t.Urgencia,
     ISNULL(cf.Valor, N'Não Informada') AS VersaoProduto,
     COUNT(1) AS Volumetria,
-    COUNT(CASE WHEN ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS Abertos,
+    COUNT(CASE WHEN CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE ISNULL(st.EhFinal, 0) END = 0 THEN 1 END) AS Abertos,
     CAST(ROUND(AVG(DATEDIFF(HOUR, t.DataCriacao, ISNULL(t.DataResolucao, SYSDATETIME()))), 1) AS DECIMAL(10,1)) AS HorasMediasResolucao
 FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
@@ -675,32 +865,70 @@ LEFT JOIN core.Dim_Calendario cal ON sb.DataSnapshot = cal.Data
 LEFT JOIN core.Dim_Status st ON sb.Status = st.Nome
 LEFT JOIN core.Dim_Agente ag ON sb.AgenteId = ag.AgenteId;
 """,
+            "vw_ticketsporclienteperiodo": """
+CREATE OR ALTER VIEW mart.vw_TicketsPorClientePeriodo
+AS
+SELECT
+    t.TicketId,
+    t.Protocolo,
+    t.DataCriacao AS DataAbertura,
+    CAST(t.DataCriacao AS DATE) AS DataAberturaDia,
+    CONVERT(CHAR(7), t.DataCriacao, 126) AS AnoMes,
+    ISNULL(emp.ClienteId, ISNULL(cli.ClienteId, ISNULL(t.EmpresaId, 'NAO_IDENTIFICADO'))) AS ClienteId,
+    ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+    ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
+    t.Status,
+    t.StatusBase,
+    CASE
+        WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') OR ISNULL(st.EhFinal, 0) = 1 THEN N'Encerrado'
+        ELSE N'Em Aberto'
+    END AS Situacao,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+    t.Categoria,
+    t.Urgencia,
+    1 AS QtdTickets
+FROM core.Fato_Ticket t
+LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+LEFT JOIN core.Dim_Agente ag ON t.AgenteId = ag.AgenteId
+LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
+LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
+WHERE t.DataCriacao IS NOT NULL;
+""",
         }
 
-        for mv in missing_views:
+        for mv in views_to_update:
             cur.execute(views_ddl[mv])
 
+        if status_fixed > 0 or proc_updated or views_to_update:
+            cur.execute("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;")
+
         conn.close()
-        print(
-            f"[OK] Views atualizadas no SQL Server ({', '.join(missing_views)}) com coluna 'Equipe' para filtro global.",
-            flush=True,
-        )
+        if views_to_update:
+            print(
+                f"[OK] Views atualizadas no SQL Server ({', '.join(views_to_update)}) com filtro 'Equipe' e correção de Backlog/SLA.",
+                flush=True,
+            )
     except Exception:
         pass
 
 
-def upsert_database(client: SupersetApiClient, db_name: str, db_uri: str) -> int:
-    """Passo 1: Cria ou atualiza a Database Connection MovideskDM."""
-    resp = client.request("GET", "/api/v1/database/", query_params={"q": "(page_size:100)"})
+def upsert_database(
+    client: SupersetApiClient,
+    db_name: str,
+    db_uri: str,
+    has_explicit_uri: bool = False,
+) -> int:
+    """Passo 1: Cria ou atualiza a Database Connection MovideskDM preservando URI existente se não sobrescrita."""
+    resp = client.request("GET", "/api/v1/database/", query_params={"q": "(page_size:100)"}, timeout=60)
     existing_id: Optional[int] = None
     for row in resp.get("result", []):
-        if row.get("database_name") == db_name:
+        if str(row.get("database_name", "")).lower() == db_name.lower():
             existing_id = int(row["id"])
             break
 
-    payload = {
+    payload: Dict[str, Any] = {
         "database_name": db_name,
-        "sqlalchemy_uri": db_uri,
         "expose_in_sqllab": True,
         "allow_ctas": False,
         "allow_cvas": False,
@@ -709,11 +937,36 @@ def upsert_database(client: SupersetApiClient, db_name: str, db_uri: str) -> int
     }
 
     if existing_id is not None:
-        client.request("PUT", f"/api/v1/database/{existing_id}", payload=payload)
-        print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com sucesso.", flush=True)
+        preserve_existing_uri = False
+        if not has_explicit_uri:
+            try:
+                detail = client.request("GET", f"/api/v1/database/{existing_id}", timeout=60)
+                existing_uri = detail.get("result", {}).get("sqlalchemy_uri", "") or ""
+                if "movideskdm" in existing_uri.lower():
+                    preserve_existing_uri = True
+            except Exception:
+                pass
+
+        if not preserve_existing_uri:
+            payload["sqlalchemy_uri"] = db_uri
+
+        try:
+            client.request("PUT", f"/api/v1/database/{existing_id}", payload=payload, timeout=90, max_retries=1)
+            msg = (
+                f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) validada preservando URI existente."
+                if preserve_existing_uri
+                else f"[OK] Passo 1/3 — Database '{db_name}' (ID={existing_id}) atualizada com sucesso."
+            )
+            print(msg, flush=True)
+        except Exception as db_put_exc:
+            print(
+                f"[AVISO] Passo 1/3 — Timeout/aviso ao atualizar metadados da Database '{db_name}' (ID={existing_id}): {db_put_exc}. Prosseguindo com a conexão existente.",
+                flush=True,
+            )
         return existing_id
 
-    create_resp = client.request("POST", "/api/v1/database/", payload=payload)
+    payload["sqlalchemy_uri"] = db_uri
+    create_resp = client.request("POST", "/api/v1/database/", payload=payload, timeout=120, max_retries=1)
     db_id = int(create_resp["id"])
     print(f"[OK] Passo 1/3 — Database '{db_name}' (ID={db_id}) criada com sucesso.", flush=True)
     return db_id
@@ -745,25 +998,26 @@ EDITABLE_COLUMN_KEYS = (
 def upsert_datasets(
     client: SupersetApiClient, db_id: int
 ) -> Dict[str, Dict[str, Any]]:
-    """Passo 2: Registra e sincroniza as 8 Views do schema mart como Datasets."""
-    resp = client.request("GET", "/api/v1/dataset/", query_params={"q": "(page_size:200)"})
+    """Passo 2: Registra e sincroniza as 9 Views do schema mart como Datasets."""
+    resp = client.request("GET", "/api/v1/dataset/", query_params={"q": "(page_size:200)"}, timeout=60)
     existing_map: Dict[str, int] = {}
     for row in resp.get("result", []):
         t_name = row.get("table_name")
         schema = row.get("schema")
-        if t_name and schema == "mart":
+        if t_name and (schema == "mart" or not schema):
             existing_map[t_name] = int(row["id"])
 
     datasets_info: Dict[str, Dict[str, Any]] = {}
 
-    for view_name, main_dttm_col, description in MART_VIEWS:
+    for idx, (view_name, main_dttm_col, description) in enumerate(MART_VIEWS, start=1):
+        print(f"[INF] Passo 2/3 — Sincronizando 'mart.{view_name}' ({idx}/{len(MART_VIEWS)})...", flush=True)
         if view_name in existing_map:
             ds_id = existing_map[view_name]
             try:
-                client.request("PUT", f"/api/v1/dataset/{ds_id}/refresh")
+                client.request("PUT", f"/api/v1/dataset/{ds_id}/refresh", timeout=90, max_retries=1)
             except Exception as refresh_exc:
                 print(
-                    f"[AVISO] Refresh de colunas em 'mart.{view_name}' falhou: {refresh_exc}",
+                    f"[AVISO] Refresh de colunas em 'mart.{view_name}' ignorado ({refresh_exc}); mantendo metadados existentes.",
                     flush=True,
                 )
         else:
@@ -775,6 +1029,8 @@ def upsert_datasets(
                     "schema": "mart",
                     "table_name": view_name,
                 },
+                timeout=90,
+                max_retries=1,
             )
             ds_id = int(create_resp["id"])
 
@@ -940,12 +1196,12 @@ def upsert_chart(
     }
 
     if chart_id > 0:
-        client.request("PUT", f"/api/v1/chart/{chart_id}", payload=payload)
+        client.request("PUT", f"/api/v1/chart/{chart_id}", payload=payload, timeout=90, max_retries=1)
     else:
-        create_resp = client.request("POST", "/api/v1/chart/", payload=payload)
+        create_resp = client.request("POST", "/api/v1/chart/", payload=payload, timeout=90, max_retries=1)
         chart_id = int(create_resp["id"])
 
-    chart_detail = client.request("GET", f"/api/v1/chart/{chart_id}").get("result", {})
+    chart_detail = client.request("GET", f"/api/v1/chart/{chart_id}", timeout=60).get("result", {})
     chart_uuid = chart_detail.get("uuid", "")
     return chart_id, chart_uuid
 
@@ -962,20 +1218,38 @@ def filter_existing_cols(ds_info: Dict[str, Any], desired_cols: List[str]) -> Li
     return resolved or desired_cols
 
 
-def build_sala_de_guerra_dashboard(
+def build_movidesk_dashboard(
     client: SupersetApiClient,
     datasets: Dict[str, Dict[str, Any]],
 ) -> str:
-    """Passo 3: Cria os gráficos essenciais e monta o Dashboard 'Sala de Guerra - Movidesk BI'."""
-    dash_title = "Sala de Guerra - Movidesk BI"
-    dash_slug = "sala-de-guerra-movidesk"
+    """Passo 3: Cria os 15 gráficos essenciais e monta/migra o Dashboard 'Dashboard - Movidesk BI'."""
+    dash_title = "Dashboard - Movidesk BI"
+    dash_slug = "dashboard-movidesk"
 
-    resp = client.request("GET", "/api/v1/dashboard/", query_params={"q": "(page_size:100)"})
+    resp = client.request("GET", "/api/v1/dashboard/", query_params={"q": "(page_size:100)"}, timeout=60)
     dashboard_id: Optional[int] = None
+    legacy_dashboard_id: Optional[int] = None
     for row in resp.get("result", []):
-        if row.get("slug") == dash_slug or row.get("dashboard_title") == dash_title:
-            dashboard_id = int(row["id"])
+        slug = str(row.get("slug") or "")
+        title = str(row.get("dashboard_title") or "")
+        row_id = row.get("id")
+        if row_id is None:
+            continue
+        if slug.lower() == dash_slug or title.lower() == dash_title.lower():
+            dashboard_id = int(row_id)
             break
+        if legacy_dashboard_id is None and (
+            slug.lower() == "sala-de-guerra-movidesk"
+            or title.lower() == "sala de guerra - movidesk bi"
+        ):
+            legacy_dashboard_id = int(row_id)
+
+    if dashboard_id is None and legacy_dashboard_id is not None:
+        dashboard_id = legacy_dashboard_id
+        print(
+            f"[INF] Dashboard anterior 'Sala de Guerra - Movidesk BI' detectado (ID={dashboard_id}). Migrando para '{dash_title}' ({dash_slug})...",
+            flush=True,
+        )
 
     if dashboard_id is None:
         create_dash = client.request(
@@ -986,11 +1260,13 @@ def build_sala_de_guerra_dashboard(
                 "slug": dash_slug,
                 "published": True,
             },
+            timeout=90,
+            max_retries=1,
         )
         dashboard_id = int(create_dash["id"])
 
     # Busca gráficos existentes para idempotência
-    charts_resp = client.request("GET", "/api/v1/chart/", query_params={"q": "(page_size:200)"})
+    charts_resp = client.request("GET", "/api/v1/chart/", query_params={"q": "(page_size:200)"}, timeout=60)
     existing_charts: Dict[str, int] = {}
     for row in charts_resp.get("result", []):
         if row.get("slice_name"):
@@ -1004,6 +1280,7 @@ def build_sala_de_guerra_dashboard(
     ds_status = datasets["vw_StatusAging"]
     ds_demanda = datasets["vw_MapaDemanda"]
     ds_clientes = datasets["vw_ClienteRaioX"]
+    ds_clientes_periodo = datasets["vw_TicketsPorClientePeriodo"]
 
     chart_specs = [
         # Row 1: 6 Big Numbers Executivos (vw_VisaoGeralKpis)
@@ -1363,6 +1640,103 @@ def build_sala_de_guerra_dashboard(
             },
             "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %).",
         ),
+        # Row 6: Pizza/Donut Tickets Abertos por Cliente (Organização) + Grid Detalhado no Período
+        (
+            "PIE_TICKETS_CLIENTE",
+            "Tickets Abertos por Cliente (Organização)",
+            "pie",
+            ds_clientes_periodo["id"],
+            {
+                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente"]),
+                "metric": make_simple_metric(ds_clientes_periodo, "QtdTickets", "SUM", "Tickets"),
+                "adhoc_filters": [
+                    {
+                        "clause": "WHERE",
+                        "comparator": "DATETRUNC(DATETIME('today'), month) : now",
+                        "datasourceWarning": False,
+                        "expressionType": "SIMPLE",
+                        "filterOptionName": "filter_dataabertura_este_mes",
+                        "isExtra": False,
+                        "isNew": False,
+                        "operator": "TEMPORAL_RANGE",
+                        "sqlExpression": None,
+                        "subject": "DataAbertura",
+                    }
+                ],
+                "row_limit": 100,
+                "sort_by_metric": True,
+                "color_scheme": "supersetColors",
+                "show_legend": True,
+                "legendType": "scroll",
+                "legendOrientation": "left",
+                "label_type": "percent",
+                "number_format": ",d",
+                "date_format": "smart_date",
+                "show_labels": True,
+                "labels_outside": False,
+                "label_line": False,
+                "show_labels_threshold": 5,
+                "show_total": True,
+                "donut": True,
+                "innerRadius": 30,
+                "outerRadius": 70,
+            },
+            "Distribuição em Donut dos tickets abertos por Cliente (Organização) no período selecionado (padrão: Este mês), filtrável por Equipe.",
+        ),
+        (
+            "TABELA_TICKETS_CLIENTE_PERIODO",
+            "Detalhamento de Tickets por Cliente no Período",
+            "table",
+            ds_clientes_periodo["id"],
+            {
+                "query_mode": "aggregate",
+                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente"]),
+                "metrics": [
+                    make_simple_metric(ds_clientes_periodo, "QtdTickets", "SUM", "Qtd Tickets"),
+                ],
+                "percent_metrics": [
+                    make_simple_metric(
+                        ds_clientes_periodo,
+                        "QtdTickets",
+                        "SUM",
+                        "Total",
+                        option_name="metric_pct_qtdtickets_sum",
+                    ),
+                ],
+                "all_columns": [],
+                "timeseries_limit_metric": make_simple_metric(
+                    ds_clientes_periodo, "QtdTickets", "SUM", "Qtd Tickets"
+                ),
+                "order_desc": True,
+                "percent_metric_calculation": "row_limit",
+                "adhoc_filters": [
+                    {
+                        "clause": "WHERE",
+                        "comparator": "DATETRUNC(DATETIME('today'), month) : now",
+                        "datasourceWarning": False,
+                        "expressionType": "SIMPLE",
+                        "filterOptionName": "filter_dataabertura_este_mes",
+                        "isExtra": False,
+                        "isNew": False,
+                        "operator": "TEMPORAL_RANGE",
+                        "sqlExpression": None,
+                        "subject": "DataAbertura",
+                    }
+                ],
+                "row_limit": 500,
+                "page_length": 15,
+                "include_search": True,
+                "show_cell_bars": True,
+                "color_pn": True,
+                "align_pn": True,
+                "show_totals": True,
+                "column_config": {
+                    "Qtd Tickets": {"d3NumberFormat": ",d"},
+                    "%Total": {"d3NumberFormat": ".1%"},
+                },
+            },
+            "Ranking detalhado de tickets abertos por Cliente no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.",
+        ),
     ]
 
     created_meta: Dict[str, Dict[str, Any]] = {}
@@ -1382,7 +1756,7 @@ def build_sala_de_guerra_dashboard(
             "uuid": c_uuid,
             "title": title,
         }
-        print(f"[OK] Gráfico '{title}' (ID={c_id}) vinculado à Sala de Guerra.")
+        print(f"[OK] Gráfico '{title}' (ID={c_id}) vinculado ao Dashboard Movidesk.")
 
     # Monta o layout v2 (position_json) com 12 colunas de largura padrão do Superset
     position_json: Dict[str, Any] = {
@@ -1402,6 +1776,7 @@ def build_sala_de_guerra_dashboard(
                 "ROW-SERIES",
                 "ROW-AGING",
                 "ROW-DEMANDA-CLIENTES",
+                "ROW-CLIENTES-PERIODO",
             ],
             "parents": ["ROOT_ID"],
         },
@@ -1447,6 +1822,13 @@ def build_sala_de_guerra_dashboard(
             "parents": ["ROOT_ID", "GRID_ID"],
             "meta": {"background": "BACKGROUND_TRANSPARENT"},
         },
+        "ROW-CLIENTES-PERIODO": {
+            "type": "ROW",
+            "id": "ROW-CLIENTES-PERIODO",
+            "children": ["CHART-PIE_TICKETS_CLIENTE", "CHART-TABELA_TICKETS_CLIENTE_PERIODO"],
+            "parents": ["ROOT_ID", "GRID_ID"],
+            "meta": {"background": "BACKGROUND_TRANSPARENT"},
+        },
     }
 
     layout_dims = {
@@ -1463,6 +1845,8 @@ def build_sala_de_guerra_dashboard(
         "TABELA_STATUS_AGING": ("ROW-AGING", 5, 44),
         "TABELA_MAPA_DEMANDA": ("ROW-DEMANDA-CLIENTES", 6, 44),
         "TABELA_CLIENTE_RAIOX": ("ROW-DEMANDA-CLIENTES", 6, 44),
+        "PIE_TICKETS_CLIENTE": ("ROW-CLIENTES-PERIODO", 7, 46),
+        "TABELA_TICKETS_CLIENTE_PERIODO": ("ROW-CLIENTES-PERIODO", 5, 46),
     }
 
     for key, (row_id, width, height) in layout_dims.items():
@@ -1485,7 +1869,7 @@ def build_sala_de_guerra_dashboard(
     # Preserva json_metadata existente do Dashboard (filtros nativos configurados, etc.)
     json_metadata: Dict[str, Any] = {}
     try:
-        dash_detail = client.request("GET", f"/api/v1/dashboard/{dashboard_id}").get("result", {})
+        dash_detail = client.request("GET", f"/api/v1/dashboard/{dashboard_id}", timeout=60).get("result", {})
         raw_meta = dash_detail.get("json_metadata")
         if raw_meta:
             parsed_meta = json.loads(raw_meta)
@@ -1506,19 +1890,25 @@ def build_sala_de_guerra_dashboard(
         native_filters = []
 
     has_equipe_filter = False
+    period_filter_id = "NATIVE_FILTER-b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    existing_period_filter: Optional[Dict[str, Any]] = None
+
     for nf in native_filters:
         if not isinstance(nf, dict):
             continue
-        if str(nf.get("name", "")).lower() == "equipe":
+        nf_id = str(nf.get("id", ""))
+        nf_name = str(nf.get("name", ""))
+        if nf_id.lower() == period_filter_id.lower() or nf_name.lower() == "período (tickets por cliente)":
+            existing_period_filter = nf
+
+        if nf_name.lower() == "equipe":
             has_equipe_filter = True
-            break
-        for tgt in nf.get("targets", []) or []:
-            col = tgt.get("column") if isinstance(tgt, dict) else None
-            if isinstance(col, dict) and str(col.get("name", "")).lower() == "equipe":
-                has_equipe_filter = True
-                break
-        if has_equipe_filter:
-            break
+        else:
+            for tgt in nf.get("targets", []) or []:
+                col = tgt.get("column") if isinstance(tgt, dict) else None
+                if isinstance(col, dict) and str(col.get("name", "")).lower() == "equipe":
+                    has_equipe_filter = True
+                    break
 
     if not has_equipe_filter:
         native_filters.append(
@@ -1553,6 +1943,46 @@ def build_sala_de_guerra_dashboard(
                 "description": "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*).",
             }
         )
+
+    excluded_for_period = [
+        meta["id"]
+        for key, meta in created_meta.items()
+        if key not in ("PIE_TICKETS_CLIENTE", "TABELA_TICKETS_CLIENTE_PERIODO")
+    ]
+    if existing_period_filter is not None:
+        scope_obj = existing_period_filter.get("scope")
+        if isinstance(scope_obj, dict):
+            scope_obj["excluded"] = excluded_for_period
+        else:
+            existing_period_filter["scope"] = {
+                "rootPath": ["ROOT_ID"],
+                "excluded": excluded_for_period,
+            }
+    else:
+        native_filters.append(
+            {
+                "id": period_filter_id,
+                "name": "Período (Tickets por Cliente)",
+                "filterType": "filter_time",
+                "targets": [{}],
+                "defaultDataMask": {
+                    "extraFormData": {},
+                    "filterState": {},
+                    "ownState": {},
+                },
+                "controlValues": {
+                    "enableEmptyFilter": False,
+                },
+                "cascadeParentIds": [],
+                "scope": {
+                    "rootPath": ["ROOT_ID"],
+                    "excluded": excluded_for_period,
+                },
+                "type": "NATIVE_FILTER",
+                "description": "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente (padrão inicial: Este mês).",
+            }
+        )
+
     json_metadata["native_filter_configuration"] = native_filters
 
     client.request(
@@ -1565,6 +1995,8 @@ def build_sala_de_guerra_dashboard(
             "json_metadata": json.dumps(json_metadata, ensure_ascii=False),
             "published": True,
         },
+        timeout=90,
+        max_retries=1,
     )
 
     # Re-confirma o vínculo dashboard_slices preservando outros dashboards do usuário
@@ -1575,6 +2007,7 @@ def build_sala_de_guerra_dashboard(
                 "PUT",
                 f"/api/v1/chart/{meta['id']}",
                 payload={"dashboards": merged_dashboards},
+                timeout=60,
             )
         except Exception:
             pass
@@ -1599,6 +2032,10 @@ def main() -> int:
     parser.add_argument("--db-uri", default=DEFAULT_DB_URI, help="SQLAlchemy URI do MovideskDM")
     args = parser.parse_args()
 
+    has_explicit_uri = any(a == "--db-uri" or a.startswith("--db-uri=") for a in sys.argv[1:]) or bool(
+        os.environ.get("MOVIDESK_DB_URI")
+    )
+
     print("=" * 76, flush=True)
     print(" AUTOMAÇÃO TOTAL APACHE SUPERSET — MOVIDESK BI (ADVICE COMPLIANCE SOLUTIONS)", flush=True)
     print("=" * 76, flush=True)
@@ -1612,13 +2049,13 @@ def main() -> int:
         client.authenticate()
         print(f"[OK] Autenticado na REST API do Superset ({args.url}) como '{args.username}'.", flush=True)
 
-        db_id = upsert_database(client, args.db_name, final_db_uri)
+        db_id = upsert_database(client, args.db_name, final_db_uri, has_explicit_uri=has_explicit_uri)
         datasets = upsert_datasets(client, db_id)
-        dash_url = build_sala_de_guerra_dashboard(client, datasets)
+        dash_url = build_movidesk_dashboard(client, datasets)
 
         print("=" * 76, flush=True)
         print(" [OK] SETUP CONCLUÍDO COM SUCESSO!", flush=True)
-        print(f" [OK] Acesse agora a Sala de Guerra: {dash_url}", flush=True)
+        print(f" [OK] Acesse agora o Dashboard Movidesk: {dash_url}", flush=True)
         print("=" * 76, flush=True)
         return 0
     except Exception as exc:

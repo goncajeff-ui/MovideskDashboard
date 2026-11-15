@@ -262,7 +262,7 @@
             <div class="card-header">
                 <div class="card-title-group">
                     <h2>Configuração Inicial do Superset</h2>
-                    <span class="card-subtitle">Provisiona automaticamente a Database Connection (<code>MovideskDM</code>), os 8 Datasets com filtro <code>Equipe</code> (<code>schema mart</code>) e o Dashboard <strong>Sala de Guerra</strong></span>
+                    <span class="card-subtitle">Provisiona automaticamente a Database Connection (<code>MovideskDM</code>), os 9 Datasets com filtro <code>Equipe</code> (<code>schema mart</code>) e o <strong>Dashboard Movidesk</strong></span>
                 </div>
                 <span class="badge @GetSupersetSetupBadgeClass()">
                     @if (SupersetService.IsSetupRunning)
@@ -320,7 +320,7 @@
                             <button type="button"
                                     class="btn btn-success"
                                     @onclick="SupersetService.OpenDashboardInBrowser">
-                                Abrir Sala de Guerra ↗
+                                Abrir Dashboard Movidesk ↗
                             </button>
                         }
 
@@ -334,8 +334,8 @@
 
                     <div class="meta-row">
                         <span class="meta-chip"><strong>1. Database:</strong> <code>MovideskDM</code> (MSSQL)</span>
-                        <span class="meta-chip"><strong>2. Datasets:</strong> 8 Views <code>mart.vw_*</code></span>
-                        <span class="meta-chip"><strong>3. Dashboard:</strong> Sala de Guerra (13 gráficos)</span>
+                        <span class="meta-chip"><strong>2. Datasets:</strong> 9 Views <code>mart.vw_*</code></span>
+                        <span class="meta-chip"><strong>3. Dashboard:</strong> Dashboard - Movidesk BI (15 gráficos)</span>
                     </div>
                 </div>
 
@@ -351,7 +351,7 @@
                         @if (setupLogs.Count == 0)
                         {
                             <div class="log-empty">
-                                Digite a senha do usuário <code>admin</code> do Apache Superset e clique em "Executar Setup Automático" para atualizar a conexão MovideskDM, sincronizar as colunas (incluindo <code>Equipe</code>) nas 8 views do schema mart e reparar/publicar os gráficos do Dashboard Sala de Guerra.
+                                Digite a senha do usuário <code>admin</code> do Apache Superset e clique em "Executar Setup Automático" para atualizar a conexão MovideskDM, sincronizar as colunas (incluindo <code>Equipe</code>) nas 9 views do schema mart e reparar/publicar os gráficos do Dashboard Movidesk.
                             </div>
                         }
                         else
@@ -552,7 +552,7 @@
 
         await SupersetService.CheckHealthAsync();
 
-        // Garante que as novas Procedures (Fuso BRT, Snapshot 90d, Pessoas) e as 8 Views mart.* estejam atualizadas no SQL Server
+        // Garante que as novas Procedures (Fuso BRT, Snapshot 90d, Pessoas) e as 9 Views mart.* estejam atualizadas no SQL Server
         _ = Task.Run(async () =>
         {
             await IngestionService.GarantirObjetosBancoAtualizadosAsync();

@@ -49,6 +49,7 @@ BEGIN
                     WHEN t.SlaDataSolucao IS NOT NULL
                          AND t.SlaDataSolucao < DATEADD(DAY, 1, CAST(d.Data AS DATETIME2(0)))
                          AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+                         AND ISNULL(st.PausaSla, 0) = 0
                     THEN 1 ELSE 0
                 END AS SlaVencidoNoDia
             FROM Datas d
@@ -65,7 +66,12 @@ BEGIN
             ) sh
             LEFT JOIN core.Dim_Status st
                 ON ISNULL(sh.StatusNoDia, t.Status) = st.Nome
-            WHERE ISNULL(st.EhFinal, 0) = 0
+            WHERE CASE
+                      WHEN st.EhFinal = 1 THEN 1
+                      WHEN sh.StatusNoDia IS NULL AND t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+                      WHEN sh.StatusNoDia IN (N'Resolvido', N'Fechado', N'Cancelado') THEN 1
+                      ELSE 0
+                  END = 0
         )
         INSERT INTO core.Fato_SnapshotBacklog (
             DataSnapshot, Equipe, AgenteId, Status, Urgencia, QtdTickets, QtdSlaVencido
@@ -100,11 +106,15 @@ BEGIN
             WHEN t.SlaDataSolucao IS NOT NULL
                  AND t.SlaDataSolucao < SYSDATETIME()
                  AND ISNULL(t.SlaSolucaoPausado, 0) = 0
+                 AND ISNULL(st.PausaSla, 0) = 0
             THEN 1
         END) AS QtdSlaVencido
     FROM core.Fato_Ticket t
     LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
-    WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+    WHERE CASE
+              WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+              ELSE ISNULL(st.EhFinal, 0)
+          END = 0
     GROUP BY
         ISNULL(t.Equipe, N'Sem Equipe'),
         ISNULL(t.AgenteId, 'NAO_ATRIBUIDO'),

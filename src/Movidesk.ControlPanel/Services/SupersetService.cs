@@ -18,7 +18,7 @@ public enum SupersetStatus
 
 /// <summary>
 /// Orquestra a inicialização do Apache Superset e executa 100% nativamente em C# (via HttpClient)
-/// o provisionamento completo da REST API do Superset (Database MovideskDM, 8 Datasets mart e Dashboard Sala de Guerra),
+/// o provisionamento completo da REST API do Superset (Database MovideskDM, 9 Datasets mart e o Dashboard Movidesk),
 /// sem depender de chamadas externas ao wsl.exe para o setup.
 /// </summary>
 public sealed class SupersetService : IDisposable
@@ -29,6 +29,7 @@ public sealed class SupersetService : IDisposable
     private readonly int _port;
     private readonly string _supersetUrl;
     private readonly string _supersetDbUri;
+    private readonly bool _hasExplicitDbUri;
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(3) };
     private readonly object _stateLock = new();
@@ -46,13 +47,14 @@ public sealed class SupersetService : IDisposable
         ("vw_BacklogEvolucao", "DataSnapshot", "Curva Histórica Diária do Backlog Total vs SLA Vencido (90 Dias)"),
         ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
         ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes, % SLA e Risco de Churn (> 60d)"),
-        ("vw_MapaDemanda", null, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)")
+        ("vw_MapaDemanda", null, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
+        ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período")
     ];
 
     public SupersetStatus Status { get; private set; } = SupersetStatus.Offline;
     public string StatusMessage { get; private set; } = "Superset parado";
     public string SupersetUrl => _supersetUrl;
-    public string DashboardUrl => $"{_supersetUrl.TrimEnd('/')}/superset/dashboard/sala-de-guerra-movidesk/";
+    public string DashboardUrl => $"{_supersetUrl.TrimEnd('/')}/superset/dashboard/dashboard-movidesk/";
     public int Port => _port;
     public string WslDistro => _wslDistro;
     public string VenvActivatePath => _venvActivatePath;
@@ -60,7 +62,7 @@ public sealed class SupersetService : IDisposable
     public bool IsSetupRunning { get; private set; }
     public bool? SetupSucceeded { get; private set; }
     public string SetupStatusMessage { get; private set; } =
-        "Pronto para provisionar a conexão MovideskDM, os 8 Datasets (schema mart) e o Dashboard Sala de Guerra.";
+        "Pronto para provisionar a conexão MovideskDM, os 9 Datasets (schema mart) e o Dashboard Movidesk.";
 
     public event Action? OnStateChanged;
 
@@ -71,8 +73,11 @@ public sealed class SupersetService : IDisposable
         _secretKey = configuration["Superset:SecretKey"] ?? "movidesk_superset_super_secret_key_2026";
         _port = int.TryParse(configuration["Superset:Port"], out var parsedPort) ? parsedPort : 8088;
         _supersetUrl = (configuration["Superset:Url"] ?? $"http://localhost:{_port}").TrimEnd('/');
-        _supersetDbUri = configuration["Superset:SqlAlchemyUri"]
-            ?? "mssql+pymssql://sa:123456@172.29.112.1:1433/MovideskDM";
+        string? configuredDbUri = configuration["Superset:SqlAlchemyUri"];
+        _hasExplicitDbUri = !string.IsNullOrWhiteSpace(configuredDbUri);
+        _supersetDbUri = string.IsNullOrWhiteSpace(configuredDbUri)
+            ? "mssql+pymssql://sa:123456@172.29.112.1:1433/MovideskDM"
+            : configuredDbUri.Trim();
     }
 
     private static string ResolveWslExecutablePath()
@@ -110,7 +115,7 @@ public sealed class SupersetService : IDisposable
             _setupLogs.Clear();
             SetupSucceeded = null;
             SetupStatusMessage =
-                "Pronto para provisionar a conexão MovideskDM, os 8 Datasets (schema mart) e o Dashboard Sala de Guerra.";
+                "Pronto para provisionar a conexão MovideskDM, os 9 Datasets (schema mart) e o Dashboard Movidesk.";
         }
         NotifyStateChanged();
     }
@@ -446,7 +451,7 @@ public sealed class SupersetService : IDisposable
             using var apiClient = new HttpClient(handler)
             {
                 BaseAddress = new Uri(_supersetUrl),
-                Timeout = TimeSpan.FromSeconds(45)
+                Timeout = TimeSpan.FromMinutes(5)
             };
             apiClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             apiClient.DefaultRequestHeaders.Referrer = new Uri($"{_supersetUrl}/");
@@ -466,19 +471,22 @@ public sealed class SupersetService : IDisposable
             AppendSetupLog($"[OK] Autenticado na REST API do Superset ({_supersetUrl}) como '{username}'.");
 
             // 2. Passo 1/3: Criar ou Atualizar Database MovideskDM
+            AppendSetupLog("[INF] Passo 1/3 — Verificando conexão Database 'MovideskDM'...");
             int dbId = await UpsertDatabaseAsync(apiClient, "MovideskDM", _supersetDbUri);
 
-            // 3. Passo 2/3: Criar ou Sincronizar os 8 Datasets do schema mart
+            // 3. Passo 2/3: Criar ou Sincronizar os 9 Datasets do schema mart
+            AppendSetupLog($"[INF] Passo 2/3 — Sincronizando {MartViews.Length} Datasets (schema 'mart') e protegendo filtro 'Equipe'...");
             Dictionary<string, DatasetMetadata> datasets = await UpsertDatasetsAsync(apiClient, dbId);
 
-            // 4. Passo 3/3: Criar os 13 Gráficos e Publicar o Dashboard "Sala de Guerra - Movidesk BI"
-            string dashUrl = await BuildSalaDeGuerraDashboardAsync(apiClient, datasets);
+            // 4. Passo 3/3: Criar os 15 Gráficos e Publicar o Dashboard "Dashboard - Movidesk BI"
+            AppendSetupLog("[INF] Passo 3/3 — Construindo/atualizando os 15 gráficos e publicando o 'Dashboard - Movidesk BI'...");
+            string dashUrl = await BuildMovideskDashboardAsync(apiClient, datasets);
 
             lock (_stateLock)
             {
                 IsSetupRunning = false;
                 SetupSucceeded = true;
-                SetupStatusMessage = "Setup concluído com sucesso! Database MovideskDM, 8 Datasets (mart) e Dashboard Sala de Guerra publicados.";
+                SetupStatusMessage = "Setup concluído com sucesso! Database MovideskDM, 9 Datasets (mart) e o Dashboard Movidesk publicados.";
             }
             AppendSetupLog($"[OK] SETUP CONCLUÍDO COM SUCESSO! Acesse: {dashUrl}");
             NotifyStateChanged();
@@ -508,7 +516,7 @@ public sealed class SupersetService : IDisposable
             ["refresh"] = true
         };
 
-        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Post, "/api/v1/security/login", loginPayload);
+        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Post, "/api/v1/security/login", loginPayload, timeoutSeconds: 60);
         if (status == HttpStatusCode.Unauthorized)
         {
             throw new InvalidOperationException(
@@ -531,9 +539,9 @@ public sealed class SupersetService : IDisposable
         return token;
     }
 
-    private static async Task<string?> FetchCsrfTokenAsync(HttpClient apiClient)
+    private async Task<string?> FetchCsrfTokenAsync(HttpClient apiClient)
     {
-        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, "/api/v1/security/csrf_token/", null);
+        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, "/api/v1/security/csrf_token/", null, timeoutSeconds: 45);
         if ((int)status >= 200 && (int)status < 300 && !string.IsNullOrWhiteSpace(body))
         {
             var json = JsonNode.Parse(body)?.AsObject();
@@ -544,7 +552,7 @@ public sealed class SupersetService : IDisposable
 
     private async Task<int> UpsertDatabaseAsync(HttpClient apiClient, string dbName, string dbUri)
     {
-        var listJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/database/?q=(page_size:100)", null);
+        var listJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/database/?q=(page_size:100)", null, timeoutSeconds: 60);
         int? existingId = null;
         if (listJson["result"] is JsonArray arr)
         {
@@ -561,7 +569,6 @@ public sealed class SupersetService : IDisposable
         var payload = new JsonObject
         {
             ["database_name"] = dbName,
-            ["sqlalchemy_uri"] = dbUri,
             ["expose_in_sqllab"] = true,
             ["allow_ctas"] = false,
             ["allow_cvas"] = false,
@@ -571,12 +578,52 @@ public sealed class SupersetService : IDisposable
 
         if (existingId.HasValue)
         {
-            await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/database/{existingId.Value}", payload);
-            AppendSetupLog($"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) atualizada com sucesso.");
+            bool preserveExistingUri = false;
+            if (!_hasExplicitDbUri)
+            {
+                try
+                {
+                    var (dbDetailStatus, dbDetailBody) = await SendJsonRawAsync(
+                        apiClient, HttpMethod.Get, $"/api/v1/database/{existingId.Value}", null, timeoutSeconds: 60);
+                    if ((int)dbDetailStatus >= 200 && (int)dbDetailStatus < 300 && !string.IsNullOrWhiteSpace(dbDetailBody))
+                    {
+                        string? existingUri = JsonNode.Parse(dbDetailBody)?["result"]?["sqlalchemy_uri"]?.GetValue<string>();
+                        if (!string.IsNullOrWhiteSpace(existingUri) &&
+                            existingUri.Contains("MovideskDM", StringComparison.OrdinalIgnoreCase))
+                        {
+                            preserveExistingUri = true;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Se não foi possível ler detalhes, segue fluxo padrão abaixo
+                }
+            }
+
+            if (!preserveExistingUri)
+            {
+                payload["sqlalchemy_uri"] = dbUri;
+            }
+
+            try
+            {
+                await SendJsonCheckedAsync(
+                    apiClient, HttpMethod.Put, $"/api/v1/database/{existingId.Value}", payload, timeoutSeconds: 90, maxRetries: 1);
+                AppendSetupLog(preserveExistingUri
+                    ? $"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) validada preservando URI existente."
+                    : $"[OK] Passo 1/3 — Database '{dbName}' (ID={existingId.Value}) atualizada com sucesso.");
+            }
+            catch (Exception dbPutEx)
+            {
+                AppendSetupLog(
+                    $"[AVISO] Passo 1/3 — Timeout/aviso ao atualizar metadados da Database '{dbName}' (ID={existingId.Value}): {dbPutEx.Message}. Prosseguindo com a conexão existente.");
+            }
             return existingId.Value;
         }
 
-        var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/database/", payload);
+        payload["sqlalchemy_uri"] = dbUri;
+        var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/database/", payload, timeoutSeconds: 120, maxRetries: 1);
         int newId = created["id"]?.GetValue<int>()
             ?? throw new InvalidOperationException("Superset não retornou o ID da Database criada.");
         AppendSetupLog($"[OK] Passo 1/3 — Database '{dbName}' (ID={newId}) criada com sucesso.");
@@ -594,7 +641,7 @@ public sealed class SupersetService : IDisposable
 
     private async Task<Dictionary<string, DatasetMetadata>> UpsertDatasetsAsync(HttpClient apiClient, int dbId)
     {
-        var listJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/dataset/?q=(page_size:200)", null);
+        var listJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/dataset/?q=(page_size:200)", null, timeoutSeconds: 60);
         var existingMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         if (listJson["result"] is JsonArray arr)
@@ -613,9 +660,13 @@ public sealed class SupersetService : IDisposable
         }
 
         var result = new Dictionary<string, DatasetMetadata>(StringComparer.OrdinalIgnoreCase);
+        int idx = 0;
 
         foreach (var (viewName, mainDttmCol, description) in MartViews)
         {
+            idx++;
+            AppendSetupLog($"[INF] Passo 2/3 — Sincronizando 'mart.{viewName}' ({idx}/{MartViews.Length})...");
+
             int dsId;
             if (existingMap.TryGetValue(viewName, out int foundId))
             {
@@ -623,7 +674,7 @@ public sealed class SupersetService : IDisposable
                 try
                 {
                     var (refreshStatus, refreshBody) = await SendJsonRawAsync(
-                        apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}/refresh", null);
+                        apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}/refresh", null, timeoutSeconds: 90, maxRetries: 1);
                     if ((int)refreshStatus < 200 || (int)refreshStatus >= 300)
                     {
                         AppendSetupLog($"[AVISO] Refresh de colunas em 'mart.{viewName}' retornou HTTP {(int)refreshStatus}: {refreshBody}");
@@ -631,7 +682,7 @@ public sealed class SupersetService : IDisposable
                 }
                 catch (Exception refreshEx)
                 {
-                    AppendSetupLog($"[AVISO] Não foi possível atualizar colunas de 'mart.{viewName}': {refreshEx.Message}");
+                    AppendSetupLog($"[AVISO] Refresh de colunas em 'mart.{viewName}' ignorado ({refreshEx.Message}); mantendo metadados existentes.");
                 }
             }
             else
@@ -642,7 +693,7 @@ public sealed class SupersetService : IDisposable
                     ["schema"] = "mart",
                     ["table_name"] = viewName
                 };
-                var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/dataset/", createPayload);
+                var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/dataset/", createPayload, timeoutSeconds: 90, maxRetries: 1);
                 dsId = created["id"]?.GetValue<int>()
                     ?? throw new InvalidOperationException($"Não foi possível obter o ID do dataset {viewName}.");
             }
@@ -842,7 +893,7 @@ public sealed class SupersetService : IDisposable
         };
     }
 
-    private static async Task<JsonArray> GetMergedChartDashboardsAsync(
+    private async Task<JsonArray> GetMergedChartDashboardsAsync(
         HttpClient apiClient,
         int chartId,
         int requiredDashboardId)
@@ -850,7 +901,7 @@ public sealed class SupersetService : IDisposable
         var ids = new HashSet<int> { requiredDashboardId };
         try
         {
-            var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null);
+            var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null, timeoutSeconds: 60);
             if ((int)status >= 200 && (int)status < 300 && !string.IsNullOrWhiteSpace(body))
             {
                 var detail = JsonNode.Parse(body)?.AsObject();
@@ -915,19 +966,19 @@ public sealed class SupersetService : IDisposable
         if (existingCharts.TryGetValue(sliceName, out foundId))
         {
             chartId = foundId;
-            await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/chart/{chartId}", payload);
+            await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/chart/{chartId}", payload, timeoutSeconds: 90);
         }
         else
         {
-            var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/chart/", payload);
+            var created = await SendJsonCheckedAsync(apiClient, HttpMethod.Post, "/api/v1/chart/", payload, timeoutSeconds: 90);
             chartId = created["id"]?.GetValue<int>()
                 ?? throw new InvalidOperationException($"Não foi possível obter o ID do gráfico '{sliceName}'.");
         }
 
-        var detail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null);
+        var detail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null, timeoutSeconds: 60);
         string uuid = detail["result"]?["uuid"]?.GetValue<string>() ?? string.Empty;
 
-        AppendSetupLog($"[OK] Gráfico '{sliceName}' (ID={chartId}) vinculado à Sala de Guerra.");
+        AppendSetupLog($"[OK] Gráfico '{sliceName}' (ID={chartId}) vinculado ao Dashboard Movidesk.");
         return new ChartMetadata
         {
             Id = chartId,
@@ -936,28 +987,45 @@ public sealed class SupersetService : IDisposable
         };
     }
 
-    private async Task<string> BuildSalaDeGuerraDashboardAsync(
+    private async Task<string> BuildMovideskDashboardAsync(
         HttpClient apiClient,
         Dictionary<string, DatasetMetadata> datasets)
     {
-        const string dashTitle = "Sala de Guerra - Movidesk BI";
-        const string dashSlug = "sala-de-guerra-movidesk";
+        const string dashTitle = "Dashboard - Movidesk BI";
+        const string dashSlug = "dashboard-movidesk";
 
-        var dashList = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/dashboard/?q=(page_size:100)", null);
+        var dashList = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/dashboard/?q=(page_size:100)", null, timeoutSeconds: 60);
         int? dashboardId = null;
+        int? legacyDashboardId = null;
         if (dashList["result"] is JsonArray dashArr)
         {
             foreach (JsonNode? row in dashArr)
             {
                 string? slug = row?["slug"]?.GetValue<string>();
                 string? title = row?["dashboard_title"]?.GetValue<string>();
+                int? rowId = row?["id"]?.GetValue<int>();
+                if (!rowId.HasValue) continue;
+
                 if (string.Equals(slug, dashSlug, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(title, dashTitle, StringComparison.OrdinalIgnoreCase))
                 {
-                    dashboardId = row?["id"]?.GetValue<int>();
+                    dashboardId = rowId.Value;
                     break;
                 }
+
+                if (!legacyDashboardId.HasValue &&
+                    (string.Equals(slug, "sala-de-guerra-movidesk", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(title, "Sala de Guerra - Movidesk BI", StringComparison.OrdinalIgnoreCase)))
+                {
+                    legacyDashboardId = rowId.Value;
+                }
             }
+        }
+
+        if (!dashboardId.HasValue && legacyDashboardId.HasValue)
+        {
+            dashboardId = legacyDashboardId.Value;
+            AppendSetupLog($"[INF] Dashboard anterior 'Sala de Guerra - Movidesk BI' detectado (ID={dashboardId.Value}). Migrando para '{dashTitle}' ({dashSlug})...");
         }
 
         if (!dashboardId.HasValue)
@@ -971,12 +1039,13 @@ public sealed class SupersetService : IDisposable
                     ["dashboard_title"] = dashTitle,
                     ["slug"] = dashSlug,
                     ["published"] = true
-                });
+                },
+                timeoutSeconds: 90);
             dashboardId = createDash["id"]?.GetValue<int>()
                 ?? throw new InvalidOperationException("Não foi possível obter o ID do Dashboard criado.");
         }
 
-        var chartsList = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/chart/?q=(page_size:200)", null);
+        var chartsList = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/chart/?q=(page_size:200)", null, timeoutSeconds: 60);
         var existingCharts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         if (chartsList["result"] is JsonArray chartArr)
         {
@@ -999,6 +1068,7 @@ public sealed class SupersetService : IDisposable
         var dsStatus = datasets["vw_StatusAging"];
         var dsDemanda = datasets["vw_MapaDemanda"];
         var dsClientes = datasets["vw_ClienteRaioX"];
+        var dsClientesPeriodo = datasets["vw_TicketsPorClientePeriodo"];
 
         var chartSpecs = new (string Key, string Title, string VizType, int DsId, JsonObject Params, string Desc)[]
         {
@@ -1224,7 +1294,84 @@ public sealed class SupersetService : IDisposable
                     ["Dias Sem Ticket"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["%Total"] = new JsonObject { ["d3NumberFormat"] = ".1%" }
                 }
-            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %).")
+            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %)."),
+
+            ("PIE_TICKETS_CLIENTE", "Tickets Abertos por Cliente (Organização)", "pie", dsClientesPeriodo.Id, new JsonObject
+            {
+                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente"),
+                ["metric"] = MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Tickets"),
+                ["adhoc_filters"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["clause"] = "WHERE",
+                        ["comparator"] = "DATETRUNC(DATETIME('today'), month) : now",
+                        ["datasourceWarning"] = false,
+                        ["expressionType"] = "SIMPLE",
+                        ["filterOptionName"] = "filter_dataabertura_este_mes",
+                        ["isExtra"] = false,
+                        ["isNew"] = false,
+                        ["operator"] = "TEMPORAL_RANGE",
+                        ["sqlExpression"] = null,
+                        ["subject"] = "DataAbertura"
+                    }),
+                ["row_limit"] = 100,
+                ["sort_by_metric"] = true,
+                ["color_scheme"] = "supersetColors",
+                ["show_legend"] = true,
+                ["legendType"] = "scroll",
+                ["legendOrientation"] = "left",
+                ["label_type"] = "percent",
+                ["number_format"] = ",d",
+                ["date_format"] = "smart_date",
+                ["show_labels"] = true,
+                ["labels_outside"] = false,
+                ["label_line"] = false,
+                ["show_labels_threshold"] = 5,
+                ["show_total"] = true,
+                ["donut"] = true,
+                ["innerRadius"] = 30,
+                ["outerRadius"] = 70
+            }, "Distribuição em Donut dos tickets abertos por Cliente (Organização) no período selecionado (padrão: Este mês), filtrável por Equipe."),
+
+            ("TABELA_TICKETS_CLIENTE_PERIODO", "Detalhamento de Tickets por Cliente no Período", "table", dsClientesPeriodo.Id, new JsonObject
+            {
+                ["query_mode"] = "aggregate",
+                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente"),
+                ["metrics"] = new JsonArray(
+                    MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Qtd Tickets")),
+                ["percent_metrics"] = new JsonArray(
+                    MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Total", "metric_pct_qtdtickets_sum")),
+                ["all_columns"] = new JsonArray(),
+                ["timeseries_limit_metric"] = MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Qtd Tickets"),
+                ["order_desc"] = true,
+                ["percent_metric_calculation"] = "row_limit",
+                ["adhoc_filters"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["clause"] = "WHERE",
+                        ["comparator"] = "DATETRUNC(DATETIME('today'), month) : now",
+                        ["datasourceWarning"] = false,
+                        ["expressionType"] = "SIMPLE",
+                        ["filterOptionName"] = "filter_dataabertura_este_mes",
+                        ["isExtra"] = false,
+                        ["isNew"] = false,
+                        ["operator"] = "TEMPORAL_RANGE",
+                        ["sqlExpression"] = null,
+                        ["subject"] = "DataAbertura"
+                    }),
+                ["row_limit"] = 500,
+                ["page_length"] = 15,
+                ["include_search"] = true,
+                ["show_cell_bars"] = true,
+                ["color_pn"] = true,
+                ["align_pn"] = true,
+                ["show_totals"] = true,
+                ["column_config"] = new JsonObject
+                {
+                    ["Qtd Tickets"] = new JsonObject { ["d3NumberFormat"] = ",d" },
+                    ["%Total"] = new JsonObject { ["d3NumberFormat"] = ".1%" }
+                }
+            }, "Ranking detalhado de tickets abertos por Cliente no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.")
         };
 
         var createdMeta = new Dictionary<string, ChartMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -1253,7 +1400,7 @@ public sealed class SupersetService : IDisposable
             {
                 ["type"] = "GRID",
                 ["id"] = "GRID_ID",
-                ["children"] = new JsonArray("ROW-KPIS", "ROW-RADAR", "ROW-SERIES", "ROW-AGING", "ROW-DEMANDA-CLIENTES"),
+                ["children"] = new JsonArray("ROW-KPIS", "ROW-RADAR", "ROW-SERIES", "ROW-AGING", "ROW-DEMANDA-CLIENTES", "ROW-CLIENTES-PERIODO"),
                 ["parents"] = new JsonArray("ROOT_ID")
             },
             ["ROW-KPIS"] = new JsonObject
@@ -1297,6 +1444,14 @@ public sealed class SupersetService : IDisposable
                 ["children"] = new JsonArray("CHART-TABELA_MAPA_DEMANDA", "CHART-TABELA_CLIENTE_RAIOX"),
                 ["parents"] = new JsonArray("ROOT_ID", "GRID_ID"),
                 ["meta"] = new JsonObject { ["background"] = "BACKGROUND_TRANSPARENT" }
+            },
+            ["ROW-CLIENTES-PERIODO"] = new JsonObject
+            {
+                ["type"] = "ROW",
+                ["id"] = "ROW-CLIENTES-PERIODO",
+                ["children"] = new JsonArray("CHART-PIE_TICKETS_CLIENTE", "CHART-TABELA_TICKETS_CLIENTE_PERIODO"),
+                ["parents"] = new JsonArray("ROOT_ID", "GRID_ID"),
+                ["meta"] = new JsonObject { ["background"] = "BACKGROUND_TRANSPARENT" }
             }
         };
 
@@ -1314,7 +1469,9 @@ public sealed class SupersetService : IDisposable
             ("TABELA_BACKLOG_AGING", "ROW-AGING", 7, 44),
             ("TABELA_STATUS_AGING", "ROW-AGING", 5, 44),
             ("TABELA_MAPA_DEMANDA", "ROW-DEMANDA-CLIENTES", 6, 44),
-            ("TABELA_CLIENTE_RAIOX", "ROW-DEMANDA-CLIENTES", 6, 44)
+            ("TABELA_CLIENTE_RAIOX", "ROW-DEMANDA-CLIENTES", 6, 44),
+            ("PIE_TICKETS_CLIENTE", "ROW-CLIENTES-PERIODO", 7, 46),
+            ("TABELA_TICKETS_CLIENTE_PERIODO", "ROW-CLIENTES-PERIODO", 5, 46)
         };
 
         foreach (var (key, rowId, width, height) in layoutDims)
@@ -1342,7 +1499,7 @@ public sealed class SupersetService : IDisposable
         JsonObject? jsonMetadata = null;
         try
         {
-            var dashDetail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dashboard/{dashboardId.Value}", null);
+            var dashDetail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dashboard/{dashboardId.Value}", null, timeoutSeconds: 60);
             string? existingMetaRaw = dashDetail["result"]?["json_metadata"]?.GetValue<string>();
             if (!string.IsNullOrWhiteSpace(existingMetaRaw))
             {
@@ -1364,16 +1521,27 @@ public sealed class SupersetService : IDisposable
 
         var nativeFilters = jsonMetadata["native_filter_configuration"] as JsonArray ?? new JsonArray();
         bool hasEquipeFilter = false;
+        const string periodFilterId = "NATIVE_FILTER-b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e";
+        JsonObject? existingPeriodFilter = null;
+
         foreach (JsonNode? nfNode in nativeFilters)
         {
-            string? nfName = nfNode?["name"]?.GetValue<string>();
+            if (nfNode is not JsonObject nfObj) continue;
+
+            string? nfId = nfObj["id"]?.GetValue<string>();
+            string? nfName = nfObj["name"]?.GetValue<string>();
+
+            if (string.Equals(nfId, periodFilterId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(nfName, "Período (Tickets por Cliente)", StringComparison.OrdinalIgnoreCase))
+            {
+                existingPeriodFilter = nfObj;
+            }
+
             if (string.Equals(nfName, "Equipe", StringComparison.OrdinalIgnoreCase))
             {
                 hasEquipeFilter = true;
-                break;
             }
-
-            if (nfNode?["targets"] is JsonArray targetsArr)
+            else if (nfObj["targets"] is JsonArray targetsArr)
             {
                 foreach (JsonNode? tNode in targetsArr)
                 {
@@ -1385,7 +1553,6 @@ public sealed class SupersetService : IDisposable
                     }
                 }
             }
-            if (hasEquipeFilter) break;
         }
 
         if (!hasEquipeFilter)
@@ -1425,6 +1592,61 @@ public sealed class SupersetService : IDisposable
                 ["description"] = "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*)."
             });
         }
+
+        var excludedForPeriod = new JsonArray();
+        foreach (var kv in createdMeta)
+        {
+            if (!string.Equals(kv.Key, "PIE_TICKETS_CLIENTE", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(kv.Key, "TABELA_TICKETS_CLIENTE_PERIODO", StringComparison.OrdinalIgnoreCase))
+            {
+                excludedForPeriod.Add(kv.Value.Id);
+            }
+        }
+
+        if (existingPeriodFilter is not null)
+        {
+            if (existingPeriodFilter["scope"] is JsonObject scopeObj)
+            {
+                scopeObj["excluded"] = excludedForPeriod;
+            }
+            else
+            {
+                existingPeriodFilter["scope"] = new JsonObject
+                {
+                    ["rootPath"] = new JsonArray("ROOT_ID"),
+                    ["excluded"] = excludedForPeriod
+                };
+            }
+        }
+        else
+        {
+            nativeFilters.Add(new JsonObject
+            {
+                ["id"] = periodFilterId,
+                ["name"] = "Período (Tickets por Cliente)",
+                ["filterType"] = "filter_time",
+                ["targets"] = new JsonArray(new JsonObject()),
+                ["defaultDataMask"] = new JsonObject
+                {
+                    ["extraFormData"] = new JsonObject(),
+                    ["filterState"] = new JsonObject(),
+                    ["ownState"] = new JsonObject()
+                },
+                ["controlValues"] = new JsonObject
+                {
+                    ["enableEmptyFilter"] = false
+                },
+                ["cascadeParentIds"] = new JsonArray(),
+                ["scope"] = new JsonObject
+                {
+                    ["rootPath"] = new JsonArray("ROOT_ID"),
+                    ["excluded"] = excludedForPeriod
+                },
+                ["type"] = "NATIVE_FILTER",
+                ["description"] = "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente (padrão inicial: Este mês)."
+            });
+        }
+
         jsonMetadata["native_filter_configuration"] = nativeFilters;
 
         await SendJsonCheckedAsync(
@@ -1438,7 +1660,8 @@ public sealed class SupersetService : IDisposable
                 ["position_json"] = positionJson.ToJsonString(),
                 ["json_metadata"] = jsonMetadata.ToJsonString(),
                 ["published"] = true
-            });
+            },
+            timeoutSeconds: 90);
 
         foreach (var meta in createdMeta.Values)
         {
@@ -1449,7 +1672,8 @@ public sealed class SupersetService : IDisposable
                     apiClient,
                     HttpMethod.Put,
                     $"/api/v1/chart/{meta.Id}",
-                    new JsonObject { ["dashboards"] = mergedDashIds });
+                    new JsonObject { ["dashboards"] = mergedDashIds },
+                    timeoutSeconds: 60);
             }
             catch
             {
@@ -1462,30 +1686,62 @@ public sealed class SupersetService : IDisposable
         return dashUrl;
     }
 
-    private static async Task<(HttpStatusCode Status, string Body)> SendJsonRawAsync(
+    private async Task<(HttpStatusCode Status, string Body)> SendJsonRawAsync(
         HttpClient apiClient,
         HttpMethod method,
         string path,
-        JsonNode? payload)
+        JsonNode? payload,
+        int timeoutSeconds = 120,
+        int maxRetries = 1,
+        CancellationToken cancellationToken = default)
     {
-        using var req = new HttpRequestMessage(method, path);
-        if (payload is not null)
-        {
-            req.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        }
+        string? payloadJson = payload?.ToJsonString();
 
-        using var resp = await apiClient.SendAsync(req);
-        string body = await resp.Content.ReadAsStringAsync();
-        return (resp.StatusCode, body);
+        for (int attempt = 0; ; attempt++)
+        {
+            using var req = new HttpRequestMessage(method, path);
+            if (payloadJson is not null)
+            {
+                req.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+            }
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+            try
+            {
+                using var resp = await apiClient.SendAsync(req, timeoutCts.Token);
+                string body = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
+                return (resp.StatusCode, body);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < maxRetries)
+            {
+                AppendSetupLog($"[AVISO] Tempo limite ({timeoutSeconds}s) atingido em {method.Method} {path}. Nova tentativa em 3s...");
+                await Task.Delay(3000, cancellationToken);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Tempo limite ({timeoutSeconds}s) excedido na requisição {method.Method} {path} ao Apache Superset.",
+                    ex);
+            }
+            catch (HttpRequestException ex) when (attempt < maxRetries)
+            {
+                AppendSetupLog($"[AVISO] Falha de comunicação em {method.Method} {path} ({ex.Message}). Nova tentativa em 3s...");
+                await Task.Delay(3000, cancellationToken);
+            }
+        }
     }
 
-    private static async Task<JsonObject> SendJsonCheckedAsync(
+    private async Task<JsonObject> SendJsonCheckedAsync(
         HttpClient apiClient,
         HttpMethod method,
         string path,
-        JsonNode? payload)
+        JsonNode? payload,
+        int timeoutSeconds = 120,
+        int maxRetries = 1)
     {
-        var (status, body) = await SendJsonRawAsync(apiClient, method, path, payload);
+        var (status, body) = await SendJsonRawAsync(apiClient, method, path, payload, timeoutSeconds, maxRetries);
         if ((int)status < 200 || (int)status >= 300)
         {
             throw new InvalidOperationException($"HTTP {(int)status} em {method.Method} {path}: {body}");

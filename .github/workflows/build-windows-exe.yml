@@ -94,7 +94,7 @@ jobs:
           name: Painel de Controle Movidesk BI v1.0.${{ github.run_number }} + Setup Automático Superset
           body: |
             ### Pacote Oficial Advice Compliance Solutions — Movidesk BI
-            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com **Configuração Inicial Automática do Apache Superset** embarcada na interface gráfica (Database `MovideskDM`, 8 Datasets `mart` e Dashboard **Sala de Guerra**) e atualização automática do banco.
+            - **`MovideskControlPanel-win-x64.zip`**: Executável standalone para Windows 10/11 (x64) com **Configuração Inicial Automática do Apache Superset** embarcada na interface gráfica (Database `MovideskDM`, 9 Datasets `mart` e **Dashboard Movidesk**) e atualização automática do banco.
             - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI.
             - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset.
             - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (12 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS` e Catálogo Definitivo das 8 Views `mart`).
