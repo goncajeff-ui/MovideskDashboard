@@ -98,11 +98,13 @@ jobs:
             - **`Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf`**: Manual de Operação do Painel de Controle Movidesk BI.
             - **`Manual_02_Configuracao_Apache_Superset_Corporativo.pdf`**: Manual Passo a Passo de Configuração do Apache Superset.
             - **`Manual_03_Dicionario_de_Dados_Completo.pdf`**: Dicionário de Dados Exaustivo (12 páginas — Arquitetura, Tabelas `INFORMATION_SCHEMA.COLUMNS` e Catálogo Definitivo das 8 Views `mart`).
+            - **`Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf`**: Manual Executivo de Leitura da Sala de Guerra — Dashboard Movidesk BI (8 páginas — Guia didático dos 15 componentes nos 4 blocos operacionais e CS).
           files: |
             MovideskControlPanel-win-x64.zip
             docs/manuais/Manual_01_Operacao_Painel_Controle_Movidesk_BI.pdf
             docs/manuais/Manual_02_Configuracao_Apache_Superset_Corporativo.pdf
             docs/manuais/Manual_03_Dicionario_de_Dados_Completo.pdf
             docs/manuais/Manual_03_Dicionario_de_Dados_MovideskDM.pdf
+            docs/manuais/Manual_04_Leitura_Executiva_Dashboard_Movidesk_BI.pdf
           prerelease: false
           make_latest: true
