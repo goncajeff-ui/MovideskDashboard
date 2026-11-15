@@ -694,9 +694,11 @@ public sealed class InstaladorManager
                 done
 
                 if [ -z "$TARGET_HOST" ]; then
-                    DEFAULT_TEST="${ROUTE_IP:-${NS_IP:-172.20.48.1}}"
-                    echo "[AVISO] Porta TCP ${SQL_PORT} do SQL Server não respondeu nos endereços testados (${CANDIDATES[*]})."
-                    echo "[AVISO] Endereço provável do Windows: ${DEFAULT_TEST}. Verifique se o serviço do SQL Server foi reiniciado após habilitar TCP/IP e se o Firewall permite conexões."
+                    DEFAULT_TEST="$ROUTE_IP"
+                    [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="$NS_IP"
+                    [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="172.20.48.1"
+                    echo "[AVISO] Porta TCP $SQL_PORT do SQL Server não respondeu nos endereços testados (${CANDIDATES[*]})."
+                    echo "[AVISO] Endereço provável do Windows: $DEFAULT_TEST. Verifique se o serviço do SQL Server foi reiniciado após habilitar TCP/IP e se o Firewall permite conexões."
                     exit 42
                 fi
 
