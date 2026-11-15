@@ -605,7 +605,11 @@
 
     private Task PararSupersetAsync() => SupersetService.StopSupersetAsync();
 
-    private Task ExecutarSetupSupersetAsync() => SupersetService.RunAutoSetupAsync(_supersetAdminPassword);
+    private async Task ExecutarSetupSupersetAsync()
+    {
+        await IngestionService.GarantirObjetosBancoAtualizadosAsync();
+        await SupersetService.RunAutoSetupAsync(_supersetAdminPassword);
+    }
 
     private async Task VerificarSupersetAsync()
     {
