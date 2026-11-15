@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Movidesk.Installer.Core;
 
@@ -23,6 +25,71 @@ public sealed class WslEngine
     {
         Timeout = TimeSpan.FromSeconds(4)
     };
+
+    private static readonly Regex AnsiEscapeRegex = new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Isola PATH Linux e DOCKER_CONFIG para impedir conflito com shims/credenciais do Docker Desktop no Windows.
+    /// </summary>
+    public const string ScriptIsolamentoDockerBash = """
+        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH || true
+        export DOCKER_CONFIG="/root/.docker-advice"
+        mkdir -p "$DOCKER_CONFIG"
+        if [ ! -f "$DOCKER_CONFIG/config.json" ]; then
+            printf '{"auths":{}}\n' > "$DOCKER_CONFIG/config.json"
+        fi
+        """;
+
+    public const string HelperComposeBash = """
+        compose_cmd() {
+            if docker compose version >/dev/null 2>&1; then
+                docker compose "$@"
+            elif command -v docker-compose >/dev/null 2>&1; then
+                docker-compose "$@"
+            else
+                echo "[ERRO] Nem 'docker compose' (v2) nem 'docker-compose' foi encontrado no WSL." >&2
+                return 1
+            fi
+        }
+        """;
+
+    public const string HelperIniciarDaemonDockerBash = """
+        garantir_daemon_docker() {
+            if docker info >/dev/null 2>&1; then
+                return 0
+            fi
+
+            echo "[INF] Iniciando daemon Docker Engine..."
+            if [ "$(ps -p 1 -o comm= 2>/dev/null || true)" = "systemd" ] && command -v systemctl >/dev/null 2>&1; then
+                systemctl unmask docker docker.socket containerd >/dev/null 2>&1 || true
+                systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+            else
+                service docker start >/dev/null 2>&1 || true
+                sleep 2
+                if ! docker info >/dev/null 2>&1; then
+                    echo "[INF] Subindo dockerd em background desacoplado..."
+                    setsid dockerd >/var/log/advice-dockerd.log 2>&1 < /dev/null &
+                fi
+            fi
+
+            for i in $(seq 1 25); do
+                if docker info >/dev/null 2>&1; then
+                    return 0
+                fi
+                sleep 1.5
+            done
+
+            echo "[ERRO] O daemon Docker não respondeu após tentativa de inicialização." >&2
+            if [ "$(ps -p 1 -o comm= 2>/dev/null || true)" = "systemd" ] && command -v journalctl >/dev/null 2>&1; then
+                journalctl -u docker --no-pager -n 15 >&2 || true
+            fi
+            if [ -f /var/log/advice-dockerd.log ]; then
+                tail -n 15 /var/log/advice-dockerd.log >&2 || true
+            fi
+            return 1
+        }
+        """;
 
     public static string ResolverCaminhoWsl()
     {
@@ -286,7 +353,6 @@ public sealed class WslEngine
 
             if (!installRes.Sucesso)
             {
-                // Recheca se a distro já ficou registrada mesmo com aviso de saída não-zero
                 ResultadoComando recheck = await ExecutarWslNativoAsync(["-l", "-q"], log, registrarLinhasNoLog: false, ct: ct);
                 bool registradaAgora = recheck.StdOut
                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -295,7 +361,7 @@ public sealed class WslEngine
                 if (!registradaAgora)
                 {
                     throw new InvalidOperationException(
-                        $"Falha ao instalar WSL 2 / {distro} (código {installRes.ExitCode}).\n{saidaCombinada}");
+                        $"Falha ao instalar WSL 2 / {distro} (código {installRes.ExitCode}).\n{FormatarResumoErro(installRes)}");
                 }
             }
         }
@@ -304,18 +370,28 @@ public sealed class WslEngine
             log.Sucesso($"Distribuição '{distro}' já encontrada no WSL.");
         }
 
-        // Garante WSL versão 2 explicitamente na distro
         log.Aguardando($"Validando versão 2 do WSL para '{distro}'...");
         await ExecutarWslNativoAsync(["--set-version", distro, "2"], log, registrarLinhasNoLog: false, ct: ct);
 
-        // Testa execução não interativa como root para garantir inicialização limpa
         ResultadoComando probe = await ExecutarBashWslAsync(
             distro,
             """
-            if [ ! -f /etc/wsl.conf ] || ! grep -q "systemd=true" /etc/wsl.conf; then
-              printf "[boot]\nsystemd=true\n" > /etc/wsl.conf
+            NEEDS_RESTART=0
+            if [ ! -f /etc/wsl.conf ]; then
+                printf "[boot]\nsystemd=true\n" > /etc/wsl.conf
+                NEEDS_RESTART=1
+            elif ! grep -qiE '^\s*systemd\s*=\s*true\b' /etc/wsl.conf; then
+                if grep -qiE '^\s*\[boot\]' /etc/wsl.conf; then
+                    sed -i '/^\s*\[boot\]/I a systemd=true' /etc/wsl.conf
+                else
+                    printf "\n[boot]\nsystemd=true\n" >> /etc/wsl.conf
+                fi
+                NEEDS_RESTART=1
             fi
-            echo "WSL2_UBUNTU_PRONTO: $(uname -r)"
+
+            PID1_COMM=$(ps -p 1 -o comm= 2>/dev/null || echo "unknown")
+            echo "WSL2_UBUNTU_PRONTO: $(uname -r) | PID1=$PID1_COMM"
+            echo "WSL_NEEDS_RESTART=$NEEDS_RESTART"
             """,
             comoRoot: true,
             log: log,
@@ -326,7 +402,35 @@ public sealed class WslEngine
         if (!probe.Sucesso)
         {
             throw new InvalidOperationException(
-                $"Não foi possível iniciar o ambiente Bash no WSL '{distro}'. Caso tenha acabado de habilitar o WSL, reinicie o Windows.\n{probe.StdErr}");
+                $"Não foi possível iniciar o ambiente Bash no WSL '{distro}'. Caso tenha acabado de habilitar o WSL, reinicie o Windows.\n{FormatarResumoErro(probe)}");
+        }
+
+        bool precisaTerminarDistro =
+            probe.StdOut.Contains("WSL_NEEDS_RESTART=1", StringComparison.Ordinal) ||
+            !probe.StdOut.Contains("PID1=systemd", StringComparison.Ordinal);
+
+        if (precisaTerminarDistro)
+        {
+            log.Aguardando($"Reiniciando instância WSL '{distro}' para efetivar systemd/kernel...");
+            await ExecutarWslNativoAsync(["--terminate", distro], log, registrarLinhasNoLog: false, timeout: TimeSpan.FromSeconds(45), ct: ct);
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+            ResultadoComando reprobe = await ExecutarBashWslAsync(
+                distro,
+                """
+                echo "WSL2_REINICIADO: $(uname -r) | PID1=$(ps -p 1 -o comm= 2>/dev/null || echo unknown)"
+                """,
+                comoRoot: true,
+                log: log,
+                registrarLinhasNoLog: true,
+                timeout: TimeSpan.FromMinutes(3),
+                ct: ct);
+
+            if (!reprobe.Sucesso)
+            {
+                throw new InvalidOperationException(
+                    $"O WSL '{distro}' não respondeu após o reinício para ativação do systemd.\n{FormatarResumoErro(reprobe)}");
+            }
         }
 
         log.Sucesso($"Ambiente WSL 2 '{distro}' operacional e configurado.");
@@ -334,38 +438,70 @@ public sealed class WslEngine
 
     public async Task InstalarEIniciarDockerAsync(string distro, AuditorLog log, CancellationToken ct)
     {
-        const string scriptDocker = """
+        string scriptDocker = $$"""
             set -e
             export DEBIAN_FRONTEND=noninteractive
 
-            if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-                echo "[INF] Docker ou Docker Compose ausente. Iniciando instalação no Ubuntu..."
+            {{ScriptIsolamentoDockerBash}}
+            {{HelperComposeBash}}
+            {{HelperIniciarDaemonDockerBash}}
+
+            # Remove symlinks quebrados ou herdados de antiga integração do Docker Desktop no WSL
+            for bin_path in /usr/bin/docker /usr/bin/docker-compose /usr/local/bin/docker /usr/local/bin/docker-compose; do
+                if [ -L "$bin_path" ]; then
+                    target=$(readlink "$bin_path" || true)
+                    if [[ "$target" == *docker-desktop* ]] || [ ! -e "$bin_path" ]; then
+                        echo "[AVISO] Removendo symlink legado do Docker Desktop: $bin_path -> $target"
+                        rm -f "$bin_path" || true
+                    fi
+                fi
+            done
+
+            if ! command -v docker >/dev/null 2>&1 || { ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; }; then
+                echo "[INF] Docker Engine ou Docker Compose ausente. Instalando no Ubuntu..."
                 apt-get update -qq
-                apt-get install -y -qq ca-certificates curl gnupg lsb-release apt-transport-https
+                apt-get install -y -qq ca-certificates curl gnupg lsb-release apt-transport-https iptables
 
                 install -m 0755 -d /etc/apt/keyrings
-                if [ ! -f /etc/apt/keyrings/docker.asc ]; then
-                    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+                if curl -fsSL --connect-timeout 12 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; then
                     chmod a+r /etc/apt/keyrings/docker.asc
-                fi
+                    . /etc/os-release
+                    echo \
+                      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+                      ${VERSION_CODENAME:-jammy} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-                . /etc/os-release
-                echo \
-                  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-                  ${VERSION_CODENAME:-jammy} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-                apt-get update -qq
-                if ! apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
-                    echo "[AVISO] Repositório oficial Docker indisponível; instalando via pacote nativo Ubuntu (docker.io)..."
-                    apt-get install -y -qq docker.io docker-compose-v2 || apt-get install -y -qq docker.io
+                    apt-get update -qq || true
+                    if ! apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+                        echo "[AVISO] Pacote oficial docker-ce falhou; aplicando fallback nativo Ubuntu (docker.io)..."
+                        rm -f /etc/apt/sources.list.d/docker.list || true
+                        apt-get update -qq
+                        apt-get install -y -qq docker.io docker-compose-v2 || apt-get install -y -qq docker.io docker-compose || apt-get install -y -qq docker.io
+                    fi
+                else
+                    echo "[AVISO] Repositório download.docker.com inacessível; instalando via pacote nativo Ubuntu..."
+                    apt-get install -y -qq docker.io docker-compose-v2 || apt-get install -y -qq docker.io docker-compose || apt-get install -y -qq docker.io
                 fi
             else
-                echo "[OK] Docker e Docker Compose já estão instalados."
+                echo "[OK] Docker e Docker Compose já estão instalados no WSL."
             fi
 
-            # Evita falha de rede docker0 em kernels WSL que ainda utilizam iptables-legacy
-            if command -v update-alternatives >/dev/null 2>&1 && [ -x /usr/sbin/iptables-legacy ]; then
-                update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+            # Configuração segura de rotação de logs no daemon.json para evitar estouro do disco virtual ext4.vhdx
+            mkdir -p /etc/docker
+            if [ ! -f /etc/docker/daemon.json ]; then
+                printf '{\n  "log-driver": "json-file",\n  "log-opts": {\n    "max-size": "10m",\n    "max-file": "3"\n  }\n}\n' > /etc/docker/daemon.json
+            fi
+
+            # Só alterna para iptables-legacy se o backend atual (nf_tables) realmente falhar na tabela NAT
+            if command -v iptables >/dev/null 2>&1; then
+                if ! iptables -t nat -L -n >/dev/null 2>&1; then
+                    echo "[AVISO] iptables padrão incompatível com o kernel WSL; alternando para iptables-legacy..."
+                    if command -v update-alternatives >/dev/null 2>&1 && [ -x /usr/sbin/iptables-legacy ]; then
+                        update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+                        if [ -x /usr/sbin/ip6tables-legacy ]; then
+                            update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
+                        fi
+                    fi
+                fi
             fi
 
             DEFAULT_USER=$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd)
@@ -373,26 +509,21 @@ public sealed class WslEngine
                 usermod -aG docker "$DEFAULT_USER" || true
             fi
 
-            if ! docker info >/dev/null 2>&1; then
-                echo "[INF] Iniciando daemon Docker..."
-                if [ "$(ps -p 1 -o comm= 2>/dev/null)" = "systemd" ]; then
-                    systemctl enable --now docker || service docker start || true
-                else
-                    service docker start >/dev/null 2>&1 || nohup dockerd >/var/log/advice-dockerd.log 2>&1 &
+            garantir_daemon_docker
+
+            if ! docker network inspect bridge >/dev/null 2>&1; then
+                echo "[AVISO] Rede bridge Docker não detectada; validando iptables e reiniciando Docker..."
+                if command -v update-alternatives >/dev/null 2>&1 && [ -x /usr/sbin/iptables-legacy ]; then
+                    update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+                    [ -x /usr/sbin/ip6tables-legacy ] && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
                 fi
+                systemctl restart docker >/dev/null 2>&1 || service docker restart >/dev/null 2>&1 || true
+                sleep 2
+                docker network inspect bridge >/dev/null 2>&1
             fi
 
-            echo "[INF] Aguardando Docker Engine responder..."
-            for i in $(seq 1 25); do
-                if docker info >/dev/null 2>&1; then
-                    echo "[OK] Docker ativo: $(docker --version) | $(docker compose version)"
-                    exit 0
-                fi
-                sleep 1.5
-            done
-
-            echo "[ERRO] O daemon Docker não respondeu a tempo."
-            exit 1
+            COMPOSE_VER=$(compose_cmd version --short 2>/dev/null || compose_cmd version 2>/dev/null | head -n 1 || echo "desconhecido")
+            echo "[OK] Docker ativo: $(docker --version) | Compose: $COMPOSE_VER"
             """;
 
         ResultadoComando res = await ExecutarBashWslAsync(
@@ -407,8 +538,97 @@ public sealed class WslEngine
         if (!res.Sucesso)
         {
             throw new InvalidOperationException(
-                $"Falha ao instalar ou inicializar o Docker no WSL '{distro}' (código {res.ExitCode}).\n{res.StdErr}");
+                $"Falha ao instalar ou inicializar o Docker no WSL '{distro}' (código {res.ExitCode}).\n{FormatarResumoErro(res)}");
         }
+    }
+
+    public bool PortaTcpEmUsoNoWindows(int porta)
+    {
+        try
+        {
+            return IPGlobalProperties.GetIPGlobalProperties()
+                .GetActiveTcpListeners()
+                .Any(ep => ep.Port == porta);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static string FormatarResumoErro(ResultadoComando res, int maxLinhas = 18, int maxCaracteres = 1400)
+    {
+        string[] FiltrarLinhas(string texto, bool removerRuidoDocker) =>
+            texto
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => AnsiEscapeRegex.Replace(l, string.Empty).Trim())
+                .Where(l => !string.IsNullOrWhiteSpace(l) && (!removerRuidoDocker || !EhLinhaRuidoProgressoDocker(l)))
+                .ToArray();
+
+        string[] linhas = !string.IsNullOrWhiteSpace(res.StdErr)
+            ? FiltrarLinhas(res.StdErr, removerRuidoDocker: true)
+            : [];
+
+        if (linhas.Length == 0 && !string.IsNullOrWhiteSpace(res.StdOut))
+        {
+            linhas = FiltrarLinhas(res.StdOut, removerRuidoDocker: true);
+        }
+
+        if (linhas.Length == 0)
+        {
+            string rawFallback = string.IsNullOrWhiteSpace(res.StdErr) ? res.StdOut : res.StdErr;
+            if (!string.IsNullOrWhiteSpace(rawFallback))
+            {
+                linhas = FiltrarLinhas(rawFallback, removerRuidoDocker: false);
+            }
+        }
+
+        if (linhas.Length == 0)
+        {
+            return "Sem detalhes adicionais emitidos em stderr/stdout.";
+        }
+
+        int omitidas = Math.Max(0, linhas.Length - maxLinhas);
+        IEnumerable<string> cauda = omitidas > 0 ? linhas.Skip(omitidas) : linhas;
+
+        var sb = new StringBuilder();
+        if (omitidas > 0)
+        {
+            sb.AppendLine($"[... {omitidas} linha(s) anteriores omitida(s); consulte o arquivo de log completo ...]");
+        }
+
+        foreach (string linha in cauda)
+        {
+            sb.AppendLine(linha);
+        }
+
+        string resultado = sb.ToString().Trim();
+        if (resultado.Length > maxCaracteres)
+        {
+            string slice = resultado[^maxCaracteres..];
+            int firstNewLine = slice.IndexOf('\n');
+            if (firstNewLine >= 0 && firstNewLine < slice.Length - 1)
+            {
+                slice = slice[(firstNewLine + 1)..];
+            }
+
+            resultado = "[... início omitido; consulte o arquivo de log completo ...]\n" + slice.TrimStart();
+        }
+
+        return resultado;
+    }
+
+    private static bool EhLinhaRuidoProgressoDocker(string linha)
+    {
+        return linha.Contains("Downloading [", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains("Extracting [", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Downloading", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Extracting", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Verifying Checksum", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Pulling fs layer", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Download complete", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Waiting", StringComparison.OrdinalIgnoreCase) ||
+               linha.Contains(": Pull complete", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task GarantirRegrasFirewallAsync(AuditorLog log, CancellationToken ct)
@@ -503,7 +723,8 @@ public sealed class WslEngine
             return string.Empty;
         }
 
-        return input.Replace("\0", string.Empty).TrimEnd();
+        string clean = AnsiEscapeRegex.Replace(input, string.Empty);
+        return clean.Replace("\0", string.Empty).TrimEnd();
     }
 
     private static bool EstaNoPath(string nomeExecutavel)

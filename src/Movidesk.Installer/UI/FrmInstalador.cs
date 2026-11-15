@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Runtime.Versioning;
+using System.Text;
 using Movidesk.Installer.Core;
 
 namespace Movidesk.Installer.UI;
@@ -49,6 +50,7 @@ public sealed class FrmInstalador : Form
     private Button _btnAbrirPainel = null!;
     private Button _btnAbrirSuperset = null!;
     private Button _btnAbrirLog = null!;
+    private Button _btnCopiarLog = null!;
 
     private static readonly Color CorFundoBase = Color.FromArgb(5, 15, 28);
     private static readonly Color CorPainelEscuro = Color.FromArgb(9, 23, 40);
@@ -75,8 +77,8 @@ public sealed class FrmInstalador : Form
     private void ConfigurarFormulario()
     {
         Text = "Instalador - Dashboard Movidesk BI";
-        ClientSize = new Size(1060, 700);
-        MinimumSize = new Size(960, 640);
+        ClientSize = new Size(1100, 715);
+        MinimumSize = new Size(1080, 660);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = CorFundoBase;
         ForeColor = CorTextoClaro;
@@ -721,10 +723,11 @@ public sealed class FrmInstalador : Form
             ColumnCount = 2,
             RowCount = 1,
             BackColor = Color.Transparent,
+            Margin = Padding.Empty,
             Padding = new Padding(0, 6, 0, 0)
         };
-        actionsBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
-        actionsBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        actionsBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        actionsBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
         actionsBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var leftButtons = new FlowLayoutPanel
@@ -732,24 +735,32 @@ public sealed class FrmInstalador : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
+            Margin = Padding.Empty,
             BackColor = Color.Transparent
         };
 
-        _btnAbrirLog = CriarBotaoSecundario("Abrir Log", width: 92);
+        _btnAbrirLog = CriarBotaoSecundario("Abrir Log", width: 82);
         _btnAbrirLog.Enabled = false;
-        _btnAbrirLog.Margin = new Padding(0, 0, 8, 0);
+        _btnAbrirLog.Margin = new Padding(0, 4, 6, 0);
         _btnAbrirLog.Click += (_, _) => AbrirCaminhoSeguro(_ultimoArquivoLog);
 
-        _btnAbrirPainel = CriarBotaoSecundario("Abrir Painel BI", width: 122);
+        _btnCopiarLog = CriarBotaoSecundario("Copiar Log", width: 90);
+        _btnCopiarLog.Enabled = true;
+        _btnCopiarLog.Margin = new Padding(0, 4, 6, 0);
+        _btnCopiarLog.Click += BtnCopiarLog_Click;
+
+        _btnAbrirPainel = CriarBotaoSecundario("Painel BI", width: 92);
         _btnAbrirPainel.Enabled = false;
-        _btnAbrirPainel.Margin = new Padding(0, 0, 8, 0);
+        _btnAbrirPainel.Margin = new Padding(0, 4, 6, 0);
         _btnAbrirPainel.Click += (_, _) => AbrirCaminhoSeguro(_ultimoExePainel);
 
-        _btnAbrirSuperset = CriarBotaoSecundario("Abrir Superset (:8088)", width: 152);
+        _btnAbrirSuperset = CriarBotaoSecundario("Superset (:8088)", width: 124);
         _btnAbrirSuperset.Enabled = false;
+        _btnAbrirSuperset.Margin = new Padding(0, 4, 0, 0);
         _btnAbrirSuperset.Click += (_, _) => AbrirCaminhoSeguro("http://localhost:8088/superset/dashboard/dashboard-movidesk/");
 
         leftButtons.Controls.Add(_btnAbrirLog);
+        leftButtons.Controls.Add(_btnCopiarLog);
         leftButtons.Controls.Add(_btnAbrirPainel);
         leftButtons.Controls.Add(_btnAbrirSuperset);
 
@@ -758,27 +769,29 @@ public sealed class FrmInstalador : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
+            Margin = Padding.Empty,
             BackColor = Color.Transparent
         };
 
         _btnInstalar = new Button
         {
             Text = "Iniciar Instalação",
-            Width = 172,
+            Width = 152,
             Height = 36,
             FlatStyle = FlatStyle.Flat,
             BackColor = CorDouradoAdvice,
             ForeColor = Color.FromArgb(10, 20, 32),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             Cursor = Cursors.Hand,
-            Margin = new Padding(8, 0, 0, 0)
+            Margin = new Padding(6, 0, 0, 0)
         };
         _btnInstalar.FlatAppearance.BorderSize = 0;
         _btnInstalar.Click += BtnInstalar_Click;
 
-        _btnCancelar = CriarBotaoSecundario("Cancelar", width: 102);
+        _btnCancelar = CriarBotaoSecundario("Cancelar", width: 90);
         _btnCancelar.Height = 36;
         _btnCancelar.Enabled = false;
+        _btnCancelar.Margin = Padding.Empty;
         _btnCancelar.Click += BtnCancelar_Click;
 
         rightButtons.Controls.Add(_btnInstalar);
@@ -869,9 +882,10 @@ public sealed class FrmInstalador : Form
             _lblStatusEtapa.Text = "❌ Falha na implantação. Consulte o console de log.";
             _lblStatusEtapa.ForeColor = Color.FromArgb(248, 113, 113);
 
+            string resumo = FormatarMensagemDialogoErro(ex.Message);
             MessageBox.Show(
                 this,
-                $"Não foi possível concluir a instalação:\n\n{ex.Message}",
+                $"Não foi possível concluir a instalação:\n\n{resumo}\n\nUse o botão 'Copiar Log' ou 'Abrir Log' para visualizar e compartilhar os detalhes completos.",
                 "Erro — Instalador Dashboard Movidesk BI",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -939,9 +953,14 @@ public sealed class FrmInstalador : Form
             _lblStatusEtapa.Text = "❌ Implantação interrompida por erro. Verifique o log acima.";
             _lblStatusEtapa.ForeColor = Color.FromArgb(248, 113, 113);
 
+            string resumo = FormatarMensagemDialogoErro(resultado.MensagemResumo);
+            string infoLog = string.IsNullOrWhiteSpace(resultado.CaminhoArquivoLog)
+                ? string.Empty
+                : $"\n\nArquivo de log completo:\n{resultado.CaminhoArquivoLog}";
+
             MessageBox.Show(
                 this,
-                $"Ocorreu uma falha durante a implantação:\n\n{resultado.MensagemResumo}\n\nConsulte o arquivo de log:\n{resultado.CaminhoArquivoLog}",
+                $"Ocorreu uma falha durante a implantação:\n\n{resumo}{infoLog}\n\nUse o botão 'Copiar Log' ou 'Abrir Log' para compartilhar os detalhes.",
                 "Falha na Implantação — Dashboard Movidesk BI",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -1243,6 +1262,127 @@ public sealed class FrmInstalador : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+    }
+
+    private async void BtnCopiarLog_Click(object? sender, EventArgs e)
+    {
+        string corpoLog = _rtbLog.Text;
+
+        if (!string.IsNullOrWhiteSpace(_ultimoArquivoLog) && File.Exists(_ultimoArquivoLog))
+        {
+            try
+            {
+                using var fs = new FileStream(_ultimoArquivoLog, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var sr = new StreamReader(fs, Encoding.UTF8);
+                string arquivoCompleto = sr.ReadToEnd();
+                if (!string.IsNullOrWhiteSpace(arquivoCompleto))
+                {
+                    corpoLog = arquivoCompleto;
+                }
+            }
+            catch
+            {
+                // Fallback transparente para o conteúdo já renderizado no RichTextBox
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(corpoLog))
+        {
+            MessageBox.Show(
+                this,
+                "Ainda não há registros de log disponíveis para cópia.",
+                "Copiar Log — Dashboard Movidesk BI",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        string normalizado = corpoLog
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("\r", "\n", StringComparison.Ordinal)
+            .Replace("\n", Environment.NewLine, StringComparison.Ordinal)
+            .TrimEnd();
+
+        var sb = new StringBuilder();
+        if (!normalizado.Contains("ADVICE INSTALLER 2.0", StringComparison.Ordinal))
+        {
+            sb.AppendLine("=== Advice Installer 2.0 — Log Dashboard Movidesk BI ===");
+            if (!string.IsNullOrWhiteSpace(_ultimoArquivoLog))
+            {
+                sb.AppendLine($"Arquivo: {_ultimoArquivoLog}");
+            }
+            sb.AppendLine($"Copiado em: {DateTime.Now:dd/MM/yyyy HH:mm:ss}");
+            sb.AppendLine(new string('-', 60));
+        }
+        sb.AppendLine(normalizado);
+
+        try
+        {
+            Clipboard.SetDataObject(sb.ToString(), copy: true, retryTimes: 5, retryDelay: 60);
+            _btnCopiarLog.Text = "Copiado ✔";
+            await Task.Delay(1800);
+            if (!IsDisposed && !_btnCopiarLog.IsDisposed)
+            {
+                _btnCopiarLog.Text = "Copiar Log";
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"Não foi possível acessar a área de transferência do Windows:\n{ex.Message}",
+                "Copiar Log",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private static string FormatarMensagemDialogoErro(string? mensagemOriginal, int maxLinhas = 16, int maxCaracteres = 1350)
+    {
+        if (string.IsNullOrWhiteSpace(mensagemOriginal))
+        {
+            return "Erro sem descrição detalhada. Consulte o arquivo de log completo.";
+        }
+
+        string[] linhas = mensagemOriginal
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToArray();
+
+        if (linhas.Length == 0)
+        {
+            return "Erro sem descrição detalhada. Consulte o arquivo de log completo.";
+        }
+
+        int omitidas = Math.Max(0, linhas.Length - maxLinhas);
+        IEnumerable<string> cauda = omitidas > 0 ? linhas.Skip(omitidas) : linhas;
+
+        var sb = new StringBuilder();
+        if (omitidas > 0)
+        {
+            sb.AppendLine($"[... {omitidas} linha(s) anteriores omitida(s); consulte o log completo ...]");
+        }
+
+        foreach (string linha in cauda)
+        {
+            sb.AppendLine(linha);
+        }
+
+        string texto = sb.ToString().Trim();
+        if (texto.Length > maxCaracteres)
+        {
+            string slice = texto[^maxCaracteres..];
+            int firstNewLine = slice.IndexOf('\n');
+            if (firstNewLine >= 0 && firstNewLine < slice.Length - 1)
+            {
+                slice = slice[(firstNewLine + 1)..];
+            }
+
+            texto = "[... início omitido; consulte o log completo ...]\n" + slice.TrimStart();
+        }
+
+        return texto;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
