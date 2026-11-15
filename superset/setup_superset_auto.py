@@ -291,8 +291,9 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
 
 def ensure_sql_views_updated(db_uri: str) -> None:
     """
-    Se pymssql estiver disponível (padrão na venv ~/superset-env), garante que as views
-    mart.vw_SlaRadar, mart.vw_BacklogAging e mart.vw_MapaDemanda já contenham a coluna Servico.
+    Se pymssql estiver disponível (padrão na venv ~/superset-env), verifica se todas as 8 views
+    do schema 'mart' já existem com a coluna normalizada `Equipe` (e `Servico` nas views de demanda/radar).
+    Só aplica CREATE OR ALTER VIEW nas views ausentes ou incompletas para não sobrescrever customizações do usuário.
     """
     try:
         import pymssql  # type: ignore
@@ -316,6 +317,91 @@ def ensure_sql_views_updated(db_uri: str) -> None:
         cur = conn.cursor()
         cur.execute(
             """
+            SELECT v.name, c.name
+            FROM sys.views v
+            INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+            LEFT JOIN sys.columns c ON v.object_id = c.object_id
+            WHERE s.name = 'mart';
+            """
+        )
+        view_cols: Dict[str, set] = {}
+        for row in cur.fetchall():
+            v_name = (row[0] or "").lower()
+            c_name = (row[1] or "").lower()
+            if v_name:
+                view_cols.setdefault(v_name, set())
+                if c_name:
+                    view_cols[v_name].add(c_name)
+
+        required_view_cols = {
+            "vw_visaogeralkpis": {"equipe"},
+            "vw_slaradar": {"equipe", "servico"},
+            "vw_backlogaging": {"equipe", "servico"},
+            "vw_statusaging": {"equipe"},
+            "vw_throughputdiario": {"equipe"},
+            "vw_clienteraiox": {"equipe"},
+            "vw_mapademanda": {"equipe", "servico"},
+            "vw_backlogevolucao": {"equipe"},
+        }
+
+        missing_views = [
+            v
+            for v, req in required_view_cols.items()
+            if v not in view_cols or not req.issubset(view_cols[v])
+        ]
+
+        if not missing_views:
+            conn.close()
+            print(
+                "[OK] Todas as 8 Views do schema 'mart' já possuem a coluna 'Equipe' (filtro global preservado).",
+                flush=True,
+            )
+            return
+
+        views_ddl: Dict[str, str] = {
+            "vw_visaogeralkpis": """
+CREATE OR ALTER VIEW mart.vw_VisaoGeralKpis
+AS
+WITH Parametros AS (
+    SELECT
+        ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'HORAS_RADAR_SLA_IMINENTE') AS INT), 4) * 60 AS MinutosSlaIminente
+),
+Base AS (
+    SELECT 
+        t.TicketId,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+        t.AgenteId,
+        t.StatusBase,
+        t.Status,
+        t.Urgencia,
+        t.DataCriacao,
+        t.DataResolucao,
+        t.SlaDataSolucao,
+        t.SlaSolucaoPausado,
+        t.ResolvidoPrimeiroContato,
+        ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
+        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal,
+        ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
+        p.MinutosSlaIminente
+    FROM core.Fato_Ticket t
+    LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+    CROSS JOIN Parametros p
+)
+SELECT 
+    b.Equipe,
+    COUNT(CASE WHEN b.EhFinal = 0 THEN 1 END) AS BacklogAtual,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao < SYSDATETIME() AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaVencidos,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaDataSolucao >= SYSDATETIME() AND DATEDIFF(MINUTE, SYSDATETIME(), b.SlaDataSolucao) <= b.MinutosSlaIminente AND ISNULL(b.SlaSolucaoPausado, 0) = 0 THEN 1 END) AS SlaIminente4h,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.SlaSolucaoPausado = 1 THEN 1 END) AS SlaPausados,
+    COUNT(CASE WHEN b.EhFinal = 0 AND b.EhDependenciaTerceiro = 1 THEN 1 END) AS EmDependenciaDev,
+    COUNT(CASE WHEN CAST(b.DataCriacao AS DATE) = CAST(SYSDATETIME() AS DATE) THEN 1 END) AS AbertosHoje,
+    COUNT(CASE WHEN CAST(b.DataResolucao AS DATE) = CAST(SYSDATETIME() AS DATE) THEN 1 END) AS ResolvidosHoje,
+    CAST(ROUND(100.0 * COUNT(CASE WHEN b.DataResolucao >= DATEADD(DAY, -30, SYSDATETIME()) AND b.ResolvidoPrimeiroContato = 1 THEN 1 END) 
+        / NULLIF(COUNT(CASE WHEN b.DataResolucao >= DATEADD(DAY, -30, SYSDATETIME()) THEN 1 END), 0), 1) AS DECIMAL(5,1)) AS FcrUltimos30DiasPct
+FROM Base b
+GROUP BY b.Equipe;
+""",
+            "vw_slaradar": """
 CREATE OR ALTER VIEW mart.vw_SlaRadar
 AS
 WITH Parametros AS (
@@ -330,7 +416,7 @@ SELECT
     t.Urgencia,
     t.Status,
     ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     t.DataCriacao,
@@ -365,10 +451,8 @@ LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
 WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
-"""
-        )
-        cur.execute(
-            """
+""",
+            "vw_backlogaging": """
 CREATE OR ALTER VIEW mart.vw_BacklogAging
 AS
 WITH Parametros AS (
@@ -377,7 +461,7 @@ WITH Parametros AS (
 SELECT 
     t.TicketId,
     t.Assunto,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
@@ -408,29 +492,108 @@ LEFT JOIN core.Dim_Cliente cli ON t.EmpresaId = cli.ClienteId
 LEFT JOIN core.Dim_Cliente emp ON cli.EmpresaId = emp.ClienteId
 CROSS JOIN Parametros p
 WHERE ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0;
-"""
-        )
-        cur.execute(
-            """
-CREATE OR ALTER VIEW mart.vw_MapaDemanda
+""",
+            "vw_statusaging": """
+CREATE OR ALTER VIEW mart.vw_StatusAging
 AS
+WITH Passagens AS (
+    SELECT
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+        sh.Status,
+        ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
+        ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
+        ISNULL(
+            sh.PermanenciaMinCorridos,
+            CASE
+                WHEN sh.DataFim IS NULL
+                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND sh.DataInicio < SYSDATETIME()
+                THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
+            END
+        ) AS MinutosCorridos,
+        ISNULL(
+            sh.PermanenciaMinUteis,
+            CASE
+                WHEN sh.DataFim IS NULL
+                     AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0
+                     AND sh.DataInicio < SYSDATETIME()
+                THEN DATEDIFF(MINUTE, sh.DataInicio, SYSDATETIME())
+            END
+        ) AS MinutosUteis
+    FROM core.Fato_StatusHistorico sh
+    INNER JOIN core.Fato_Ticket t ON sh.TicketId = t.TicketId
+    LEFT JOIN core.Dim_Status st ON sh.Status = st.Nome
+)
 SELECT 
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
-    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
-    t.Categoria,
-    t.Urgencia,
-    ISNULL(cf.Valor, N'Não Informada') AS VersaoProduto,
-    COUNT(1) AS Volumetria,
-    COUNT(CASE WHEN ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS Abertos,
-    CAST(ROUND(AVG(DATEDIFF(HOUR, t.DataCriacao, ISNULL(t.DataResolucao, SYSDATETIME()))), 1) AS DECIMAL(10,1)) AS HorasMediasResolucao
-FROM core.Fato_Ticket t
-LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
-LEFT JOIN core.Fato_CampoCustomizado cf ON t.TicketId = cf.TicketId AND cf.CampoId = 133948
-GROUP BY ISNULL(t.Equipe, N'Sem Equipe'), ISNULL(t.ServicoN1, N'Não Informado'), t.Categoria, t.Urgencia, ISNULL(cf.Valor, N'Não Informada');
-"""
-        )
-        cur.execute(
-            """
+    Equipe,
+    Status,
+    GrupoStatus,
+    EhDependenciaTerceiro,
+    COUNT(1) AS QtdPassagens,
+    CAST(ROUND(AVG(MinutosUteis / 60.0), 1) AS DECIMAL(10,1)) AS HorasUteisMedias,
+    CAST(ROUND(AVG(MinutosCorridos / 60.0), 1) AS DECIMAL(10,1)) AS HorasCorridasMedias,
+    CAST(ROUND(SUM(MinutosCorridos / 60.0), 0) AS BIGINT) AS HorasCorridasTotais
+FROM Passagens
+WHERE MinutosCorridos IS NOT NULL AND MinutosCorridos >= 0
+GROUP BY Equipe, Status, GrupoStatus, EhDependenciaTerceiro;
+""",
+            "vw_throughputdiario": """
+CREATE OR ALTER VIEW mart.vw_ThroughputDiario
+AS
+WITH LimiteDatas AS (
+    SELECT
+        ISNULL(
+            (SELECT MIN(CAST(DataCriacao AS DATE)) FROM core.Fato_Ticket WHERE DataCriacao >= '2022-01-01'),
+            DATEADD(DAY, -90, CAST(SYSDATETIME() AS DATE))
+        ) AS DataMinima
+),
+Datas AS (
+    SELECT c.Data, c.AnoMes, c.EhDiaUtil
+    FROM core.Dim_Calendario c
+    CROSS JOIN LimiteDatas l
+    WHERE c.Data BETWEEN l.DataMinima AND CAST(SYSDATETIME() AS DATE)
+),
+Abertos AS (
+    SELECT 
+        CAST(DataCriacao AS DATE) AS Data,
+        ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe') AS Equipe,
+        COUNT(1) AS QtdAbertos
+    FROM core.Fato_Ticket
+    WHERE DataCriacao IS NOT NULL
+    GROUP BY CAST(DataCriacao AS DATE), ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe')
+),
+Resolvidos AS (
+    SELECT 
+        CAST(DataResolucao AS DATE) AS Data,
+        ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe') AS Equipe,
+        COUNT(1) AS QtdResolvidos
+    FROM core.Fato_Ticket
+    WHERE DataResolucao IS NOT NULL
+    GROUP BY CAST(DataResolucao AS DATE), ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe')
+),
+Equipes AS (
+    SELECT ISNULL(NULLIF(LTRIM(RTRIM(Nome)), N''), N'Sem Equipe') AS Equipe
+    FROM core.Dim_Equipe
+    WHERE EhSuporte = 1
+    UNION
+    SELECT Equipe FROM Abertos
+    UNION
+    SELECT Equipe FROM Resolvidos
+)
+SELECT 
+    d.Data,
+    d.AnoMes,
+    d.EhDiaUtil,
+    eq.Equipe,
+    ISNULL(a.QtdAbertos, 0) AS Abertos,
+    ISNULL(r.QtdResolvidos, 0) AS Resolvidos,
+    ISNULL(r.QtdResolvidos, 0) - ISNULL(a.QtdAbertos, 0) AS SaldoLiquido
+FROM Datas d
+CROSS JOIN Equipes eq
+LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Equipe = a.Equipe
+LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Equipe = r.Equipe;
+""",
+            "vw_clienteraiox": """
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
 AS
 WITH Parametros AS (
@@ -441,7 +604,7 @@ SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     COUNT(t.TicketId) AS TotalTicketsHistorico,
     COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
     COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
@@ -464,12 +627,64 @@ GROUP BY
     c.ClienteId,
     c.Nome,
     c.RazaoSocial,
-    ISNULL(t.Equipe, N'Sem Equipe'),
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
     p.DiasSilenciosoCritico;
-"""
-        )
+""",
+            "vw_mapademanda": """
+CREATE OR ALTER VIEW mart.vw_MapaDemanda
+AS
+SELECT 
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
+    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+    t.Categoria,
+    t.Urgencia,
+    ISNULL(cf.Valor, N'Não Informada') AS VersaoProduto,
+    COUNT(1) AS Volumetria,
+    COUNT(CASE WHEN ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS Abertos,
+    CAST(ROUND(AVG(DATEDIFF(HOUR, t.DataCriacao, ISNULL(t.DataResolucao, SYSDATETIME()))), 1) AS DECIMAL(10,1)) AS HorasMediasResolucao
+FROM core.Fato_Ticket t
+LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
+LEFT JOIN core.Fato_CampoCustomizado cf ON t.TicketId = cf.TicketId AND cf.CampoId = 133948
+GROUP BY
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
+    ISNULL(t.ServicoN1, N'Não Informado'),
+    t.Categoria,
+    t.Urgencia,
+    ISNULL(cf.Valor, N'Não Informada');
+""",
+            "vw_backlogevolucao": """
+CREATE OR ALTER VIEW mart.vw_BacklogEvolucao
+AS
+SELECT
+    sb.DataSnapshot,
+    cal.AnoMes,
+    cal.NomeDiaSemana,
+    cal.EhDiaUtil,
+    ISNULL(NULLIF(LTRIM(RTRIM(sb.Equipe)), N''), N'Sem Equipe') AS Equipe,
+    sb.AgenteId,
+    ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
+    sb.Status,
+    ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
+    ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
+    sb.Urgencia,
+    sb.QtdTickets,
+    sb.QtdSlaVencido,
+    (sb.QtdTickets - sb.QtdSlaVencido) AS QtdNoPrazo
+FROM core.Fato_SnapshotBacklog sb
+LEFT JOIN core.Dim_Calendario cal ON sb.DataSnapshot = cal.Data
+LEFT JOIN core.Dim_Status st ON sb.Status = st.Nome
+LEFT JOIN core.Dim_Agente ag ON sb.AgenteId = ag.AgenteId;
+""",
+        }
+
+        for mv in missing_views:
+            cur.execute(views_ddl[mv])
+
         conn.close()
-        print("[OK] Views do schema 'mart' sincronizadas no SQL Server (Servico + vw_ClienteRaioX por Equipe).", flush=True)
+        print(
+            f"[OK] Views atualizadas no SQL Server ({', '.join(missing_views)}) com coluna 'Equipe' para filtro global.",
+            flush=True,
+        )
     except Exception:
         pass
 
@@ -504,6 +719,29 @@ def upsert_database(client: SupersetApiClient, db_name: str, db_uri: str) -> int
     return db_id
 
 
+EDITABLE_COLUMN_KEYS = (
+    "id",
+    "column_name",
+    "type",
+    "is_dttm",
+    "groupby",
+    "filterable",
+    "is_active",
+    "description",
+    "verbose_name",
+    "expression",
+    "extra",
+    "python_date_format",
+    "datetime_format",
+    "advanced_data_type",
+    "certified_by",
+    "certification_details",
+    "is_certified",
+    "uuid",
+    "warning_markdown",
+)
+
+
 def upsert_datasets(
     client: SupersetApiClient, db_id: int
 ) -> Dict[str, Dict[str, Any]]:
@@ -523,8 +761,11 @@ def upsert_datasets(
             ds_id = existing_map[view_name]
             try:
                 client.request("PUT", f"/api/v1/dataset/{ds_id}/refresh")
-            except Exception:
-                pass
+            except Exception as refresh_exc:
+                print(
+                    f"[AVISO] Refresh de colunas em 'mart.{view_name}' falhou: {refresh_exc}",
+                    flush=True,
+                )
         else:
             create_resp = client.request(
                 "POST",
@@ -539,36 +780,67 @@ def upsert_datasets(
 
         detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
 
-        if main_dttm_col:
-            try:
-                update_payload: Dict[str, Any] = {
-                    "main_dttm_col": main_dttm_col,
-                    "description": description,
-                }
-                raw_cols = detail.get("columns", [])
-                needs_dttm_flag = any(
-                    c.get("column_name", "").lower() == main_dttm_col.lower() and not c.get("is_dttm")
-                    for c in raw_cols
-                )
-                if needs_dttm_flag and raw_cols:
-                    updated_cols = []
-                    for c in raw_cols:
-                        col_item: Dict[str, Any] = {
-                            "id": c["id"],
-                            "column_name": c["column_name"],
-                            "type": c.get("type") or "STRING",
-                            "is_dttm": bool(c.get("is_dttm"))
-                            or (c.get("column_name", "").lower() == main_dttm_col.lower()),
-                            "groupby": bool(c.get("groupby", True)),
-                            "filterable": bool(c.get("filterable", True)),
-                        }
-                        updated_cols.append(col_item)
+        try:
+            update_payload: Dict[str, Any] = {
+                "description": description,
+                "filter_select_enabled": True,
+            }
+            if main_dttm_col:
+                update_payload["main_dttm_col"] = main_dttm_col
+
+            raw_cols = detail.get("columns", [])
+            if raw_cols:
+                needs_col_update = False
+                updated_cols: List[Dict[str, Any]] = []
+                for c in raw_cols:
+                    c_name = c.get("column_name", "")
+                    is_main_dttm = bool(main_dttm_col and c_name.lower() == main_dttm_col.lower())
+                    is_equipe = c_name.lower() == "equipe"
+
+                    curr_dttm = bool(c.get("is_dttm"))
+                    curr_groupby = bool(c.get("groupby", True))
+                    curr_filterable = bool(c.get("filterable", True))
+
+                    target_dttm = curr_dttm or is_main_dttm
+                    target_groupby = True if is_equipe else curr_groupby
+                    target_filterable = True if is_equipe else curr_filterable
+
+                    if (
+                        target_dttm != curr_dttm
+                        or target_groupby != curr_groupby
+                        or target_filterable != curr_filterable
+                    ):
+                        needs_col_update = True
+
+                    col_item = {
+                        k: c[k]
+                        for k in EDITABLE_COLUMN_KEYS
+                        if k in c and c[k] is not None
+                    }
+                    col_item["column_name"] = c_name
+                    col_item.setdefault("type", "STRING")
+                    col_item["is_dttm"] = target_dttm
+                    col_item["groupby"] = target_groupby
+                    col_item["filterable"] = target_filterable
+                    updated_cols.append(col_item)
+
+                if needs_col_update:
                     update_payload["columns"] = updated_cols
 
+            try:
                 client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=update_payload)
-                detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
             except Exception:
-                pass
+                fallback_payload: Dict[str, Any] = {
+                    "description": description,
+                    "filter_select_enabled": True,
+                }
+                if main_dttm_col:
+                    fallback_payload["main_dttm_col"] = main_dttm_col
+                client.request("PUT", f"/api/v1/dataset/{ds_id}", payload=fallback_payload)
+
+            detail = client.request("GET", f"/api/v1/dataset/{ds_id}").get("result", {})
+        except Exception:
+            pass
 
         cols_by_name = {
             c["column_name"]: c for c in detail.get("columns", []) if "column_name" in c
@@ -597,7 +869,11 @@ def resolve_col_name(ds_info: Dict[str, Any], target_col: str) -> str:
 
 
 def make_simple_metric(
-    ds_info: Dict[str, Any], col_name: str, aggregate: str, label: str
+    ds_info: Dict[str, Any],
+    col_name: str,
+    aggregate: str,
+    label: str,
+    option_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     actual_col = resolve_col_name(ds_info, col_name)
     col_meta = ds_info.get("columns", {}).get(actual_col, {})
@@ -612,8 +888,24 @@ def make_simple_metric(
         "column": col_obj,
         "aggregate": aggregate,
         "label": label,
-        "optionName": f"metric_{actual_col.lower()}_{aggregate.lower()}",
+        "optionName": option_name or f"metric_{actual_col.lower()}_{aggregate.lower()}",
     }
+
+
+def get_merged_chart_dashboards(
+    client: SupersetApiClient, chart_id: int, required_dashboard_id: int
+) -> List[int]:
+    ids = {required_dashboard_id}
+    try:
+        detail = client.request("GET", f"/api/v1/chart/{chart_id}").get("result", {})
+        for item in detail.get("dashboards", []):
+            if isinstance(item, dict) and item.get("id") is not None:
+                ids.add(int(item["id"]))
+            elif isinstance(item, int):
+                ids.add(item)
+    except Exception:
+        pass
+    return sorted(ids)
 
 
 def upsert_chart(
@@ -630,18 +922,24 @@ def upsert_chart(
     params_copy["datasource"] = f"{ds_id}__table"
     params_copy["viz_type"] = viz_type
 
+    if slice_name in existing_charts:
+        chart_id = existing_charts[slice_name]
+        merged_dashboards = get_merged_chart_dashboards(client, chart_id, dashboard_id)
+    else:
+        chart_id = 0
+        merged_dashboards = [dashboard_id]
+
     payload = {
         "slice_name": slice_name,
         "viz_type": viz_type,
         "datasource_id": ds_id,
         "datasource_type": "table",
-        "dashboards": [dashboard_id],
+        "dashboards": merged_dashboards,
         "description": description,
         "params": json.dumps(params_copy, ensure_ascii=False),
     }
 
-    if slice_name in existing_charts:
-        chart_id = existing_charts[slice_name]
+    if chart_id > 0:
         client.request("PUT", f"/api/v1/chart/{chart_id}", payload=payload)
     else:
         create_resp = client.request("POST", "/api/v1/chart/", payload=payload)
@@ -1002,28 +1300,68 @@ def build_sala_de_guerra_dashboard(
             "table",
             ds_clientes["id"],
             {
-                "query_mode": "raw",
-                "all_columns": filter_existing_cols(
+                "query_mode": "aggregate",
+                "groupby": filter_existing_cols(
                     ds_clientes,
                     [
                         "Cliente",
                         "Equipe",
                         "StatusRelacionamento",
-                        "TicketsAtualmenteAbertos",
-                        "TotalTicketsHistorico",
-                        "SlaCumpridoPct",
-                        "DiasDesdeUltimoTicket",
                         "DataUltimoTicket",
                     ],
                 ),
-                "order_by_cols": ['["TotalTicketsHistorico", false]'],
+                "metrics": [
+                    make_simple_metric(ds_clientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
+                    make_simple_metric(ds_clientes, "TicketsAtualmenteAbertos", "SUM", "Em Aberto"),
+                    make_simple_metric(ds_clientes, "SlaCumpridoPct", "AVG", "SLA Cumprido (%)"),
+                    make_simple_metric(ds_clientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket"),
+                ],
+                "percent_metrics": [
+                    make_simple_metric(
+                        ds_clientes,
+                        "TotalTicketsHistorico",
+                        "SUM",
+                        "Total",
+                        option_name="metric_pct_totalticketshistorico_sum",
+                    ),
+                ],
+                "all_columns": [],
+                "timeseries_limit_metric": make_simple_metric(
+                    ds_clientes, "TotalTicketsHistorico", "SUM", "Total Tickets"
+                ),
+                "order_desc": True,
+                "percent_metric_calculation": "row_limit",
+                "table_timestamp_format": "%d/%m/%Y",
+                "adhoc_filters": [
+                    {
+                        "clause": "WHERE",
+                        "comparator": "No filter",
+                        "datasourceWarning": False,
+                        "expressionType": "SIMPLE",
+                        "filterOptionName": "filter_dataultimoticket_temporal",
+                        "isExtra": False,
+                        "isNew": False,
+                        "operator": "TEMPORAL_RANGE",
+                        "sqlExpression": None,
+                        "subject": "DataUltimoTicket",
+                    }
+                ],
                 "row_limit": 500,
                 "page_length": 15,
                 "include_search": True,
                 "show_cell_bars": True,
-                "adhoc_filters": [],
+                "color_pn": True,
+                "align_pn": True,
+                "show_totals": True,
+                "column_config": {
+                    "Total Tickets": {"d3NumberFormat": ",d"},
+                    "Em Aberto": {"d3NumberFormat": ",d"},
+                    "SLA Cumprido (%)": {"d3NumberFormat": ".1f"},
+                    "Dias Sem Ticket": {"d3NumberFormat": ",d"},
+                    "%Total": {"d3NumberFormat": ".1%"},
+                },
             },
-            "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos.",
+            "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %).",
         ),
     ]
 
@@ -1144,14 +1482,78 @@ def build_sala_de_guerra_dashboard(
             },
         }
 
-    json_metadata = {
-        "timed_refresh_immune_slices": [],
-        "expanded_slices": {},
-        "refresh_frequency": 60,
-        "default_filters": "{}",
-        "color_scheme": "supersetColors",
-        "cross_filters_enabled": True,
-    }
+    # Preserva json_metadata existente do Dashboard (filtros nativos configurados, etc.)
+    json_metadata: Dict[str, Any] = {}
+    try:
+        dash_detail = client.request("GET", f"/api/v1/dashboard/{dashboard_id}").get("result", {})
+        raw_meta = dash_detail.get("json_metadata")
+        if raw_meta:
+            parsed_meta = json.loads(raw_meta)
+            if isinstance(parsed_meta, dict):
+                json_metadata = parsed_meta
+    except Exception:
+        pass
+
+    json_metadata.setdefault("timed_refresh_immune_slices", [])
+    json_metadata.setdefault("expanded_slices", {})
+    json_metadata.setdefault("refresh_frequency", 60)
+    json_metadata.setdefault("default_filters", "{}")
+    json_metadata.setdefault("color_scheme", "supersetColors")
+    json_metadata["cross_filters_enabled"] = True
+
+    native_filters = json_metadata.get("native_filter_configuration")
+    if not isinstance(native_filters, list):
+        native_filters = []
+
+    has_equipe_filter = False
+    for nf in native_filters:
+        if not isinstance(nf, dict):
+            continue
+        if str(nf.get("name", "")).lower() == "equipe":
+            has_equipe_filter = True
+            break
+        for tgt in nf.get("targets", []) or []:
+            col = tgt.get("column") if isinstance(tgt, dict) else None
+            if isinstance(col, dict) and str(col.get("name", "")).lower() == "equipe":
+                has_equipe_filter = True
+                break
+        if has_equipe_filter:
+            break
+
+    if not has_equipe_filter:
+        native_filters.append(
+            {
+                "id": "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+                "name": "Equipe",
+                "filterType": "filter_select",
+                "targets": [
+                    {
+                        "datasetId": ds_kpis["id"],
+                        "column": {"name": "Equipe"},
+                    }
+                ],
+                "defaultDataMask": {
+                    "extraFormData": {},
+                    "filterState": {},
+                    "ownState": {},
+                },
+                "controlValues": {
+                    "enableEmptyFilter": False,
+                    "defaultToFirstItem": False,
+                    "multiSelect": True,
+                    "searchAllOptions": False,
+                    "inverseSelection": False,
+                },
+                "cascadeParentIds": [],
+                "scope": {
+                    "rootPath": ["ROOT_ID"],
+                    "excluded": [],
+                },
+                "type": "NATIVE_FILTER",
+                "description": "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*).",
+            }
+        )
+    json_metadata["native_filter_configuration"] = native_filters
 
     client.request(
         "PUT",
@@ -1165,13 +1567,14 @@ def build_sala_de_guerra_dashboard(
         },
     )
 
-    # Re-confirma o vínculo dashboard_slices após atualização do position_json
+    # Re-confirma o vínculo dashboard_slices preservando outros dashboards do usuário
     for meta in created_meta.values():
         try:
+            merged_dashboards = get_merged_chart_dashboards(client, meta["id"], dashboard_id)
             client.request(
                 "PUT",
                 f"/api/v1/chart/{meta['id']}",
-                payload={"dashboards": [dashboard_id]},
+                payload={"dashboards": merged_dashboards},
             )
         except Exception:
             pass

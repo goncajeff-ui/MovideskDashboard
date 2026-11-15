@@ -583,6 +583,15 @@ public sealed class SupersetService : IDisposable
         return newId;
     }
 
+    private static readonly string[] EditableDatasetColumnKeys =
+    [
+        "id", "column_name", "type", "is_dttm", "groupby", "filterable",
+        "is_active", "description", "verbose_name", "expression", "extra",
+        "python_date_format", "datetime_format", "advanced_data_type",
+        "certified_by", "certification_details", "is_certified", "uuid",
+        "warning_markdown"
+    ];
+
     private async Task<Dictionary<string, DatasetMetadata>> UpsertDatasetsAsync(HttpClient apiClient, int dbId)
     {
         var listJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, "/api/v1/dataset/?q=(page_size:200)", null);
@@ -613,11 +622,16 @@ public sealed class SupersetService : IDisposable
                 dsId = foundId;
                 try
                 {
-                    await SendJsonRawAsync(apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}/refresh", null);
+                    var (refreshStatus, refreshBody) = await SendJsonRawAsync(
+                        apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}/refresh", null);
+                    if ((int)refreshStatus < 200 || (int)refreshStatus >= 300)
+                    {
+                        AppendSetupLog($"[AVISO] Refresh de colunas em 'mart.{viewName}' retornou HTTP {(int)refreshStatus}: {refreshBody}");
+                    }
                 }
-                catch
+                catch (Exception refreshEx)
                 {
-                    // Ignora falha eventual de refresh
+                    AppendSetupLog($"[AVISO] Não foi possível atualizar colunas de 'mart.{viewName}': {refreshEx.Message}");
                 }
             }
             else
@@ -633,25 +647,101 @@ public sealed class SupersetService : IDisposable
                     ?? throw new InvalidOperationException($"Não foi possível obter o ID do dataset {viewName}.");
             }
 
-            if (!string.IsNullOrWhiteSpace(mainDttmCol))
-            {
-                try
-                {
-                    var updatePayload = new JsonObject
-                    {
-                        ["main_dttm_col"] = mainDttmCol,
-                        ["description"] = description
-                    };
-                    await SendJsonRawAsync(apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}", updatePayload);
-                }
-                catch
-                {
-                    // Ignora caso o Superset bloqueie atualização parcial de metadados
-                }
-            }
-
             var detailJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dataset/{dsId}", null);
             var detailResult = detailJson["result"]?.AsObject();
+
+            try
+            {
+                var updatePayload = new JsonObject
+                {
+                    ["description"] = description,
+                    ["filter_select_enabled"] = true
+                };
+
+                if (!string.IsNullOrWhiteSpace(mainDttmCol))
+                {
+                    updatePayload["main_dttm_col"] = mainDttmCol;
+                }
+
+                if (detailResult?["columns"] is JsonArray rawCols && rawCols.Count > 0)
+                {
+                    bool needsColumnUpdate = false;
+                    var updatedCols = new JsonArray();
+
+                    foreach (JsonNode? rawColNode in rawCols)
+                    {
+                        if (rawColNode is not JsonObject rawCol) continue;
+
+                        string? cName = rawCol["column_name"]?.GetValue<string>();
+                        if (string.IsNullOrWhiteSpace(cName)) continue;
+
+                        bool isMainDttm = !string.IsNullOrWhiteSpace(mainDttmCol) &&
+                            string.Equals(cName, mainDttmCol, StringComparison.OrdinalIgnoreCase);
+                        bool isEquipe = string.Equals(cName, "Equipe", StringComparison.OrdinalIgnoreCase);
+
+                        bool currIsDttm = rawCol["is_dttm"]?.GetValue<bool>() ?? false;
+                        bool currGroupby = rawCol["groupby"]?.GetValue<bool>() ?? true;
+                        bool currFilterable = rawCol["filterable"]?.GetValue<bool>() ?? true;
+
+                        bool targetIsDttm = currIsDttm || isMainDttm;
+                        bool targetGroupby = isEquipe ? true : currGroupby;
+                        bool targetFilterable = isEquipe ? true : currFilterable;
+
+                        if (targetIsDttm != currIsDttm ||
+                            targetGroupby != currGroupby ||
+                            targetFilterable != currFilterable)
+                        {
+                            needsColumnUpdate = true;
+                        }
+
+                        var colCopy = new JsonObject();
+                        foreach (string key in EditableDatasetColumnKeys)
+                        {
+                            if (rawCol.TryGetPropertyValue(key, out JsonNode? propVal) && propVal is not null)
+                            {
+                                colCopy[key] = propVal.DeepClone();
+                            }
+                        }
+
+                        colCopy["column_name"] = cName;
+                        if (colCopy["type"] is null) colCopy["type"] = "STRING";
+                        colCopy["is_dttm"] = targetIsDttm;
+                        colCopy["groupby"] = targetGroupby;
+                        colCopy["filterable"] = targetFilterable;
+
+                        updatedCols.Add(colCopy);
+                    }
+
+                    if (needsColumnUpdate && updatedCols.Count > 0)
+                    {
+                        updatePayload["columns"] = updatedCols;
+                    }
+                }
+
+                var (putStatus, _) = await SendJsonRawAsync(apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}", updatePayload);
+                if ((int)putStatus < 200 || (int)putStatus >= 300)
+                {
+                    // Fallback seguro sem o array columns caso o Superset recuse alteração em colunas
+                    var fallbackPayload = new JsonObject
+                    {
+                        ["description"] = description,
+                        ["filter_select_enabled"] = true
+                    };
+                    if (!string.IsNullOrWhiteSpace(mainDttmCol))
+                    {
+                        fallbackPayload["main_dttm_col"] = mainDttmCol;
+                    }
+                    await SendJsonRawAsync(apiClient, HttpMethod.Put, $"/api/v1/dataset/{dsId}", fallbackPayload);
+                }
+
+                detailJson = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dataset/{dsId}", null);
+                detailResult = detailJson["result"]?.AsObject();
+            }
+            catch
+            {
+                // Mantém os metadados recuperados no GET inicial
+            }
+
             string uuid = detailResult?["uuid"]?.GetValue<string>() ?? string.Empty;
 
             var cols = new Dictionary<string, (int? Id, string Type)>(StringComparer.OrdinalIgnoreCase);
@@ -720,7 +810,12 @@ public sealed class SupersetService : IDisposable
         return arr;
     }
 
-    private static JsonObject MakeSimpleMetric(DatasetMetadata ds, string colName, string aggregate, string label)
+    private static JsonObject MakeSimpleMetric(
+        DatasetMetadata ds,
+        string colName,
+        string aggregate,
+        string label,
+        string? customOptionName = null)
     {
         string actualCol = ResolveColName(ds, colName);
         var colObj = new JsonObject
@@ -733,14 +828,59 @@ public sealed class SupersetService : IDisposable
             colObj["id"] = metaWithId.Id.Value;
         }
 
+        string optionName = string.IsNullOrWhiteSpace(customOptionName)
+            ? $"metric_{actualCol.ToLowerInvariant()}_{aggregate.ToLowerInvariant()}"
+            : customOptionName;
+
         return new JsonObject
         {
             ["expressionType"] = "SIMPLE",
             ["column"] = colObj,
             ["aggregate"] = aggregate,
             ["label"] = label,
-            ["optionName"] = $"metric_{actualCol.ToLowerInvariant()}_{aggregate.ToLowerInvariant()}"
+            ["optionName"] = optionName
         };
+    }
+
+    private static async Task<JsonArray> GetMergedChartDashboardsAsync(
+        HttpClient apiClient,
+        int chartId,
+        int requiredDashboardId)
+    {
+        var ids = new HashSet<int> { requiredDashboardId };
+        try
+        {
+            var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, $"/api/v1/chart/{chartId}", null);
+            if ((int)status >= 200 && (int)status < 300 && !string.IsNullOrWhiteSpace(body))
+            {
+                var detail = JsonNode.Parse(body)?.AsObject();
+                if (detail?["result"]?["dashboards"] is JsonArray dashArr)
+                {
+                    foreach (JsonNode? item in dashArr)
+                    {
+                        if (item is JsonObject obj && obj["id"]?.GetValue<int>() is int objId)
+                        {
+                            ids.Add(objId);
+                        }
+                        else if (item is JsonValue val && val.TryGetValue<int>(out int rawId))
+                        {
+                            ids.Add(rawId);
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Mantém ao menos requiredDashboardId
+        }
+
+        var result = new JsonArray();
+        foreach (int id in ids)
+        {
+            result.Add(id);
+        }
+        return result;
     }
 
     private async Task<ChartMetadata> UpsertChartAsync(
@@ -756,19 +896,23 @@ public sealed class SupersetService : IDisposable
         paramsObj["datasource"] = $"{dsId}__table";
         paramsObj["viz_type"] = vizType;
 
+        JsonArray mergedDashboards = existingCharts.TryGetValue(sliceName, out int foundId)
+            ? await GetMergedChartDashboardsAsync(apiClient, foundId, dashboardId)
+            : new JsonArray(dashboardId);
+
         var payload = new JsonObject
         {
             ["slice_name"] = sliceName,
             ["viz_type"] = vizType,
             ["datasource_id"] = dsId,
             ["datasource_type"] = "table",
-            ["dashboards"] = new JsonArray(dashboardId),
+            ["dashboards"] = mergedDashboards,
             ["description"] = description,
             ["params"] = paramsObj.ToJsonString()
         };
 
         int chartId;
-        if (existingCharts.TryGetValue(sliceName, out int foundId))
+        if (existingCharts.TryGetValue(sliceName, out foundId))
         {
             chartId = foundId;
             await SendJsonCheckedAsync(apiClient, HttpMethod.Put, $"/api/v1/chart/{chartId}", payload);
@@ -1036,17 +1180,51 @@ public sealed class SupersetService : IDisposable
 
             ("TABELA_CLIENTE_RAIOX", "Raio-X de Empresas Clientes e Radar de Churn (Silenciosos > 60d)", "table", dsClientes.Id, new JsonObject
             {
-                ["query_mode"] = "raw",
-                ["all_columns"] = FilterExistingCols(dsClientes,
-                    "Cliente", "Equipe", "StatusRelacionamento", "TicketsAtualmenteAbertos",
-                    "TotalTicketsHistorico", "SlaCumpridoPct", "DiasDesdeUltimoTicket", "DataUltimoTicket"),
-                ["order_by_cols"] = new JsonArray("[\"TotalTicketsHistorico\", false]"),
+                ["query_mode"] = "aggregate",
+                ["groupby"] = FilterExistingCols(dsClientes,
+                    "Cliente", "Equipe", "StatusRelacionamento", "DataUltimoTicket"),
+                ["metrics"] = new JsonArray(
+                    MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
+                    MakeSimpleMetric(dsClientes, "TicketsAtualmenteAbertos", "SUM", "Em Aberto"),
+                    MakeSimpleMetric(dsClientes, "SlaCumpridoPct", "AVG", "SLA Cumprido (%)"),
+                    MakeSimpleMetric(dsClientes, "DiasDesdeUltimoTicket", "MAX", "Dias Sem Ticket")),
+                ["percent_metrics"] = new JsonArray(
+                    MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total", "metric_pct_totalticketshistorico_sum")),
+                ["all_columns"] = new JsonArray(),
+                ["timeseries_limit_metric"] = MakeSimpleMetric(dsClientes, "TotalTicketsHistorico", "SUM", "Total Tickets"),
+                ["order_desc"] = true,
+                ["percent_metric_calculation"] = "row_limit",
+                ["table_timestamp_format"] = "%d/%m/%Y",
+                ["adhoc_filters"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["clause"] = "WHERE",
+                        ["comparator"] = "No filter",
+                        ["datasourceWarning"] = false,
+                        ["expressionType"] = "SIMPLE",
+                        ["filterOptionName"] = "filter_dataultimoticket_temporal",
+                        ["isExtra"] = false,
+                        ["isNew"] = false,
+                        ["operator"] = "TEMPORAL_RANGE",
+                        ["sqlExpression"] = null,
+                        ["subject"] = "DataUltimoTicket"
+                    }),
                 ["row_limit"] = 500,
                 ["page_length"] = 15,
                 ["include_search"] = true,
                 ["show_cell_bars"] = true,
-                ["adhoc_filters"] = new JsonArray()
-            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos.")
+                ["color_pn"] = true,
+                ["align_pn"] = true,
+                ["show_totals"] = true,
+                ["column_config"] = new JsonObject
+                {
+                    ["Total Tickets"] = new JsonObject { ["d3NumberFormat"] = ",d" },
+                    ["Em Aberto"] = new JsonObject { ["d3NumberFormat"] = ",d" },
+                    ["SLA Cumprido (%)"] = new JsonObject { ["d3NumberFormat"] = ".1f" },
+                    ["Dias Sem Ticket"] = new JsonObject { ["d3NumberFormat"] = ",d" },
+                    ["%Total"] = new JsonObject { ["d3NumberFormat"] = ".1%" }
+                }
+            }, "Saúde da carteira de clientes por equipe, % SLA cumprido e alerta de clientes silenciosos (modo agregado com totais e %).")
         };
 
         var createdMeta = new Dictionary<string, ChartMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -1160,15 +1338,94 @@ public sealed class SupersetService : IDisposable
             };
         }
 
-        var jsonMetadata = new JsonObject
+        // Preserva json_metadata existente do Dashboard (filtros nativos configurados, paleta de cores, etc.)
+        JsonObject? jsonMetadata = null;
+        try
         {
-            ["timed_refresh_immune_slices"] = new JsonArray(),
-            ["expanded_slices"] = new JsonObject(),
-            ["refresh_frequency"] = 60,
-            ["default_filters"] = "{}",
-            ["color_scheme"] = "supersetColors",
-            ["cross_filters_enabled"] = true
-        };
+            var dashDetail = await SendJsonCheckedAsync(apiClient, HttpMethod.Get, $"/api/v1/dashboard/{dashboardId.Value}", null);
+            string? existingMetaRaw = dashDetail["result"]?["json_metadata"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(existingMetaRaw))
+            {
+                jsonMetadata = JsonNode.Parse(existingMetaRaw) as JsonObject;
+            }
+        }
+        catch
+        {
+            // Usa objeto padrão se não for possível ler metadados anteriores
+        }
+
+        jsonMetadata ??= new JsonObject();
+        jsonMetadata["timed_refresh_immune_slices"] ??= new JsonArray();
+        jsonMetadata["expanded_slices"] ??= new JsonObject();
+        jsonMetadata["refresh_frequency"] ??= 60;
+        jsonMetadata["default_filters"] ??= "{}";
+        jsonMetadata["color_scheme"] ??= "supersetColors";
+        jsonMetadata["cross_filters_enabled"] = true;
+
+        var nativeFilters = jsonMetadata["native_filter_configuration"] as JsonArray ?? new JsonArray();
+        bool hasEquipeFilter = false;
+        foreach (JsonNode? nfNode in nativeFilters)
+        {
+            string? nfName = nfNode?["name"]?.GetValue<string>();
+            if (string.Equals(nfName, "Equipe", StringComparison.OrdinalIgnoreCase))
+            {
+                hasEquipeFilter = true;
+                break;
+            }
+
+            if (nfNode?["targets"] is JsonArray targetsArr)
+            {
+                foreach (JsonNode? tNode in targetsArr)
+                {
+                    string? colName = tNode?["column"]?["name"]?.GetValue<string>();
+                    if (string.Equals(colName, "Equipe", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasEquipeFilter = true;
+                        break;
+                    }
+                }
+            }
+            if (hasEquipeFilter) break;
+        }
+
+        if (!hasEquipeFilter)
+        {
+            nativeFilters.Add(new JsonObject
+            {
+                ["id"] = "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+                ["name"] = "Equipe",
+                ["filterType"] = "filter_select",
+                ["targets"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["datasetId"] = dsKpis.Id,
+                        ["column"] = new JsonObject { ["name"] = "Equipe" }
+                    }),
+                ["defaultDataMask"] = new JsonObject
+                {
+                    ["extraFormData"] = new JsonObject(),
+                    ["filterState"] = new JsonObject(),
+                    ["ownState"] = new JsonObject()
+                },
+                ["controlValues"] = new JsonObject
+                {
+                    ["enableEmptyFilter"] = false,
+                    ["defaultToFirstItem"] = false,
+                    ["multiSelect"] = true,
+                    ["searchAllOptions"] = false,
+                    ["inverseSelection"] = false
+                },
+                ["cascadeParentIds"] = new JsonArray(),
+                ["scope"] = new JsonObject
+                {
+                    ["rootPath"] = new JsonArray("ROOT_ID"),
+                    ["excluded"] = new JsonArray()
+                },
+                ["type"] = "NATIVE_FILTER",
+                ["description"] = "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*)."
+            });
+        }
+        jsonMetadata["native_filter_configuration"] = nativeFilters;
 
         await SendJsonCheckedAsync(
             apiClient,
@@ -1187,11 +1444,12 @@ public sealed class SupersetService : IDisposable
         {
             try
             {
+                var mergedDashIds = await GetMergedChartDashboardsAsync(apiClient, meta.Id, dashboardId.Value);
                 await SendJsonRawAsync(
                     apiClient,
                     HttpMethod.Put,
                     $"/api/v1/chart/{meta.Id}",
-                    new JsonObject { ["dashboards"] = new JsonArray(dashboardId.Value) });
+                    new JsonObject { ["dashboards"] = mergedDashIds });
             }
             catch
             {

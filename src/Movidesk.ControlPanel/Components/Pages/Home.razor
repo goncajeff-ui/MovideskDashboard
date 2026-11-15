@@ -256,13 +256,13 @@
         </section>
 
         <!-- ===============================================================
-             CARD: CONFIGURAÇÃO INICIAL DO SUPERSET (AUTOMAÇÃO PYTHON / WSL2)
+             CARD: CONFIGURAÇÃO INICIAL DO SUPERSET (AUTOMAÇÃO NATIVA C#)
              =============================================================== -->
         <section class="card card-full">
             <div class="card-header">
                 <div class="card-title-group">
                     <h2>Configuração Inicial do Superset</h2>
-                    <span class="card-subtitle">Provisiona automaticamente a Database Connection (<code>MovideskDM</code>), os 8 Datasets (<code>schema mart</code>) e o Dashboard <strong>Sala de Guerra</strong></span>
+                    <span class="card-subtitle">Provisiona automaticamente a Database Connection (<code>MovideskDM</code>), os 8 Datasets com filtro <code>Equipe</code> (<code>schema mart</code>) e o Dashboard <strong>Sala de Guerra</strong></span>
                 </div>
                 <span class="badge @GetSupersetSetupBadgeClass()">
                     @if (SupersetService.IsSetupRunning)
@@ -344,14 +344,14 @@
                 }
                 <div class="console-box console-box-compact">
                     <div class="console-header">
-                        <span>Console do Setup Automático do Superset (stdout / stderr via WSL2)</span>
+                        <span>Console do Setup Automático do Superset (REST API Nativa C#)</span>
                         <span class="muted">@setupLogs.Count linha(s)</span>
                     </div>
                     <div class="console-log">
                         @if (setupLogs.Count == 0)
                         {
                             <div class="log-empty">
-                                Digite a senha do usuário <code>admin</code> do Apache Superset e clique em "Executar Setup Automático" para criar a conexão MovideskDM, registrar as 8 views do schema mart e publicar o Dashboard Sala de Guerra.
+                                Digite a senha do usuário <code>admin</code> do Apache Superset e clique em "Executar Setup Automático" para atualizar a conexão MovideskDM, sincronizar as colunas (incluindo <code>Equipe</code>) nas 8 views do schema mart e reparar/publicar os gráficos do Dashboard Sala de Guerra.
                             </div>
                         }
                         else

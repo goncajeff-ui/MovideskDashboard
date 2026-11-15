@@ -42,6 +42,7 @@ public sealed class MovideskIngestionService : IDisposable
 
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
     private readonly object _stateLock = new();
+    private readonly SemaphoreSlim _schemaInitLock = new(1, 1);
     private readonly List<string> _logs = new();
     private CancellationTokenSource? _cts;
     private bool _objetosBancoVerificados;
@@ -102,16 +103,21 @@ public sealed class MovideskIngestionService : IDisposable
     }
 
     /// <summary>
-    /// Aplica automaticamente no banco MovideskDM as Procedures (usp_AtualizarSnapshotBacklog,
-    /// usp_ProcessarPessoas, usp_ProcessarTickets), o dicionário Dim_CampoCustomizado e as 8 Views mart.*,
-    /// além de reprocessar os chamados existentes em raw.Ticket caso Fato_SnapshotBacklog esteja vazio.
+    /// Valida no banco MovideskDM se as Procedures (usp_AtualizarSnapshotBacklog,
+    /// usp_ProcessarPessoas, usp_ProcessarTickets), o dicionário Dim_CampoCustomizado e todas as
+    /// 8 Views mart.* (incluindo coluna 'Equipe' para filtro global e 'Servico') estão presentes.
+    /// Só aplica os scripts SQL embutidos se algum objeto ou coluna obrigatória estiver ausente/desatualizada,
+    /// preservando quaisquer ALTER VIEW executados diretamente via SSMS.
     /// </summary>
     public async Task GarantirObjetosBancoAtualizadosAsync(CancellationToken ct = default)
     {
         if (_objetosBancoVerificados) return;
 
+        await _schemaInitLock.WaitAsync(ct);
         try
         {
+            if (_objetosBancoVerificados) return;
+
             await using var conn = new SqlConnection(_connectionString);
             await conn.OpenAsync(ct);
 
@@ -134,11 +140,110 @@ public sealed class MovideskIngestionService : IDisposable
                 await cmdCampos.ExecuteNonQueryAsync(ct);
             }
 
-            // 2. Aplica 04_procedure_processamento.sql e 03_views_kpis.sql embutidos no executável
-            await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.04_procedure_processamento.sql", ct);
-            await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.03_views_kpis.sql", ct);
+            // 2. Verifica Procedures no schema core antes de aplicar 04_procedure_processamento.sql
+            const string sqlCheckProcs = @"
+                SELECT
+                    p.name,
+                    OBJECT_DEFINITION(p.object_id) AS Definicao
+                FROM sys.procedures p
+                INNER JOIN sys.schemas s ON p.schema_id = s.schema_id
+                WHERE s.name = 'core'
+                  AND p.name IN ('usp_AtualizarSnapshotBacklog', 'usp_ProcessarPessoas', 'usp_ProcessarTickets');";
 
-            // 3. Verifica se os chamados já existentes precisam ser reprocessados para Fuso BRT + Snapshot 90d
+            var procDefs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            await using (var cmdCheckProcs = new SqlCommand(sqlCheckProcs, conn) { CommandTimeout = 30 })
+            await using (var readerProcs = await cmdCheckProcs.ExecuteReaderAsync(ct))
+            {
+                while (await readerProcs.ReadAsync(ct))
+                {
+                    string procName = readerProcs.GetString(0);
+                    string procDef = readerProcs.IsDBNull(1) ? string.Empty : readerProcs.GetString(1);
+                    procDefs[procName] = procDef;
+                }
+            }
+
+            bool precisaAtualizarProcs =
+                !procDefs.ContainsKey("usp_AtualizarSnapshotBacklog") ||
+                !procDefs.ContainsKey("usp_ProcessarPessoas") ||
+                !procDefs.TryGetValue("usp_ProcessarTickets", out var ticketsProcDef) ||
+                !ticketsProcDef.Contains("E. South America Standard Time", StringComparison.OrdinalIgnoreCase) ||
+                !ticketsProcDef.Contains("CriadoPorId", StringComparison.OrdinalIgnoreCase);
+
+            if (precisaAtualizarProcs)
+            {
+                AppendLog("[INF] Aplicando procedures atualizadas (04_procedure_processamento.sql) no MovideskDM...");
+                await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.04_procedure_processamento.sql", ct);
+            }
+
+            // 3. Verifica todas as 8 Views no schema mart + colunas obrigatórias ('Equipe' e 'Servico')
+            const string sqlCheckViews = @"
+                SELECT
+                    v.name AS ViewName,
+                    c.name AS ColumnName
+                FROM sys.views v
+                INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+                LEFT JOIN sys.columns c ON v.object_id = c.object_id
+                WHERE s.name = 'mart';";
+
+            var viewColumns = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            await using (var cmdCheckViews = new SqlCommand(sqlCheckViews, conn) { CommandTimeout = 30 })
+            await using (var readerViews = await cmdCheckViews.ExecuteReaderAsync(ct))
+            {
+                while (await readerViews.ReadAsync(ct))
+                {
+                    string viewName = readerViews.GetString(0);
+                    if (!viewColumns.TryGetValue(viewName, out var cols))
+                    {
+                        cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        viewColumns[viewName] = cols;
+                    }
+                    if (!readerViews.IsDBNull(1))
+                    {
+                        cols.Add(readerViews.GetString(1));
+                    }
+                }
+            }
+
+            var viewsObrigatorias = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["vw_VisaoGeralKpis"] = ["Equipe"],
+                ["vw_SlaRadar"] = ["Equipe", "Servico"],
+                ["vw_BacklogAging"] = ["Equipe", "Servico"],
+                ["vw_StatusAging"] = ["Equipe"],
+                ["vw_ThroughputDiario"] = ["Equipe"],
+                ["vw_ClienteRaioX"] = ["Equipe"],
+                ["vw_MapaDemanda"] = ["Equipe", "Servico"],
+                ["vw_BacklogEvolucao"] = ["Equipe"]
+            };
+
+            bool precisaAtualizarViews = false;
+            foreach (var (viewName, reqCols) in viewsObrigatorias)
+            {
+                if (!viewColumns.TryGetValue(viewName, out var existingCols))
+                {
+                    precisaAtualizarViews = true;
+                    break;
+                }
+
+                foreach (string reqCol in reqCols)
+                {
+                    if (!existingCols.Contains(reqCol))
+                    {
+                        precisaAtualizarViews = true;
+                        break;
+                    }
+                }
+
+                if (precisaAtualizarViews) break;
+            }
+
+            if (precisaAtualizarViews)
+            {
+                AppendLog("[INF] Views faltantes ou sem coluna 'Equipe'/'Servico' detectadas. Sincronizando 03_views_kpis.sql...");
+                await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.03_views_kpis.sql", ct);
+            }
+
+            // 4. Verifica se os chamados já existentes precisam ser reprocessados para Fuso BRT + Snapshot 90d
             const string sqlCheckSnapshot = @"
                 SELECT
                     (SELECT COUNT(*) FROM raw.Ticket) AS TotalRaw,
@@ -165,34 +270,22 @@ public sealed class MovideskIngestionService : IDisposable
                     await cmdReset.ExecuteNonQueryAsync(ct);
                 }
 
-                while (!ct.IsCancellationRequested)
-                {
-                    int pendentes;
-                    await using (var cmdPend = new SqlCommand("SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0;", conn) { CommandTimeout = 30 })
-                    {
-                        pendentes = Convert.ToInt32(await cmdPend.ExecuteScalarAsync(ct));
-                    }
-
-                    if (pendentes <= 0) break;
-
-                    await using var cmdProc = new SqlCommand("core.usp_ProcessarTickets", conn)
-                    {
-                        CommandType = CommandType.StoredProcedure,
-                        CommandTimeout = 300
-                    };
-                    await cmdProc.ExecuteNonQueryAsync(ct);
-                }
+                await ExecutarProcessamentoCoreCompletoInternoAsync(conn, ct);
 
                 await using (var cmdSnap = new SqlCommand("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;", conn) { CommandTimeout = 300 })
                 {
                     await cmdSnap.ExecuteNonQueryAsync(ct);
                 }
 
-                AppendLog("[OK] Procedures, 8 Views (incluindo mart.vw_BacklogEvolucao), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
+                AppendLog("[OK] Procedures, 8 Views (todas com filtro Equipe), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
+            }
+            else if (precisaAtualizarViews || precisaAtualizarProcs)
+            {
+                AppendLog("[OK] Procedures e as 8 Views mart.* (com filtro Equipe em todas) sincronizadas no MovideskDM.");
             }
             else
             {
-                AppendLog("[OK] Procedures (usp_ProcessarTickets, usp_ProcessarPessoas, usp_AtualizarSnapshotBacklog) e 8 Views sincronizadas no MovideskDM.");
+                AppendLog("[OK] 8 Views mart.* validadas com filtro 'Equipe' e Procedures íntegras (definições preservadas).");
             }
 
             _objetosBancoVerificados = true;
@@ -200,6 +293,10 @@ public sealed class MovideskIngestionService : IDisposable
         catch (Exception ex)
         {
             AppendLog($"[WRN] Aviso ao verificar atualização automática de procedures/views: {ex.Message}");
+        }
+        finally
+        {
+            _schemaInitLock.Release();
         }
     }
 
@@ -443,7 +540,7 @@ public sealed class MovideskIngestionService : IDisposable
                             if (ins > 0 || upd > 0)
                             {
                                 SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
-                                await ExecutarProcessamentoCoreAsync(token);
+                                await ExecutarProcessamentoCoreCompletoAsync(token);
                             }
 
                             RegistrarEstatisticasLote(recentes.Count, ins, upd);
@@ -493,7 +590,7 @@ public sealed class MovideskIngestionService : IDisposable
                         if (ins > 0 || upd > 0)
                         {
                             SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
-                            await ExecutarProcessamentoCoreAsync(token);
+                            await ExecutarProcessamentoCoreCompletoAsync(token);
                         }
 
                         foreach (var t in tickets)
@@ -566,7 +663,7 @@ public sealed class MovideskIngestionService : IDisposable
                     if (inseridos > 0 || atualizados > 0)
                     {
                         SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE)...");
-                        await ExecutarProcessamentoCoreAsync(token);
+                        await ExecutarProcessamentoCoreCompletoAsync(token);
                     }
 
                     RegistrarEstatisticasLote(tickets.Count, inseridos, atualizados);
@@ -759,8 +856,8 @@ public sealed class MovideskIngestionService : IDisposable
 
                 if (totalCiclo > 0)
                 {
-                    SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets para atualizar views do Superset...");
-                    await ExecutarProcessamentoCoreAsync(token);
+                    SetStage(IngestionStage.ProcessingCore, "Processando Core...", "Executando core.usp_ProcessarTickets (RAW -> CORE) com preservação das Views/Filtros...");
+                    await ExecutarProcessamentoCoreCompletoAsync(token);
 
                     if (maiorDataLote.HasValue)
                     {
@@ -776,7 +873,17 @@ public sealed class MovideskIngestionService : IDisposable
                 }
                 else
                 {
-                    SetStage(IngestionStage.Completed, "Concluído", "Carga Incremental concluída. Nenhum ticket novo ou alterado desde a última marca d'água.");
+                    int pendentesRestantes = await ContarTicketsPendentesRawAsync(token);
+                    if (pendentesRestantes > 0)
+                    {
+                        SetStage(IngestionStage.ProcessingCore, "Processando Core...", $"Processando {pendentesRestantes:N0} tickets pendentes em raw.Ticket (RAW -> CORE) com preservação das Views/Filtros...");
+                        await ExecutarProcessamentoCoreCompletoAsync(token);
+                        SetStage(IngestionStage.Completed, "Concluído", $"Carga Incremental concluída. Nenhum ticket novo na API, e {pendentesRestantes:N0} chamados pendentes foram processados para o Data Mart (core).");
+                    }
+                    else
+                    {
+                        SetStage(IngestionStage.Completed, "Concluído", "Carga Incremental concluída. Nenhum ticket novo ou alterado desde a última marca d'água.");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -1105,16 +1212,47 @@ public sealed class MovideskIngestionService : IDisposable
         return (inseridos, atualizados);
     }
 
-    private async Task ExecutarProcessamentoCoreAsync(CancellationToken ct)
+    private async Task<int> ContarTicketsPendentesRawAsync(CancellationToken ct)
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand("core.usp_ProcessarTickets", conn)
+        await using var cmd = new SqlCommand("SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0;", conn) { CommandTimeout = 30 };
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
+    }
+
+    private async Task ExecutarProcessamentoCoreCompletoAsync(CancellationToken ct)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await ExecutarProcessamentoCoreCompletoInternoAsync(conn, ct);
+    }
+
+    private static async Task ExecutarProcessamentoCoreCompletoInternoAsync(SqlConnection conn, CancellationToken ct)
+    {
+        int pendentesAnteriores = int.MaxValue;
+        while (!ct.IsCancellationRequested)
         {
-            CommandType = CommandType.StoredProcedure,
-            CommandTimeout = 300
-        };
-        await cmd.ExecuteNonQueryAsync(ct);
+            int pendentes;
+            await using (var cmdPend = new SqlCommand("SELECT COUNT(*) FROM raw.Ticket WHERE Processado = 0;", conn) { CommandTimeout = 30 })
+            {
+                pendentes = Convert.ToInt32(await cmdPend.ExecuteScalarAsync(ct));
+            }
+
+            if (pendentes <= 0 || pendentes >= pendentesAnteriores)
+            {
+                break;
+            }
+
+            pendentesAnteriores = pendentes;
+
+            await using var cmd = new SqlCommand("core.usp_ProcessarTickets", conn)
+            {
+                CommandType = CommandType.StoredProcedure,
+                CommandTimeout = 300
+            };
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 
     private async Task ExecutarProcessamentoPessoasCoreAsync(CancellationToken ct)
@@ -1280,6 +1418,7 @@ public sealed class MovideskIngestionService : IDisposable
     {
         _cts?.Cancel();
         _cts?.Dispose();
+        _schemaInitLock.Dispose();
         _httpClient.Dispose();
     }
 }

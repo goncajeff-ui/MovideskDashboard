@@ -679,7 +679,7 @@ WITH Parametros AS (
 Base AS (
     SELECT 
         t.TicketId,
-        ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
         t.AgenteId,
         t.StatusBase,
         t.Status,
@@ -727,7 +727,7 @@ SELECT
     t.Urgencia,
     t.Status,
     ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     t.DataCriacao,
@@ -773,7 +773,7 @@ WITH Parametros AS (
 SELECT 
     t.TicketId,
     t.Assunto,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     ISNULL(emp.Nome, ISNULL(cli.Nome, N'Não Identificado')) AS Cliente,
     ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
@@ -810,7 +810,7 @@ CREATE OR ALTER VIEW mart.vw_StatusAging
 AS
 WITH Passagens AS (
     SELECT
-        ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
         sh.Status,
         ISNULL(st.GrupoStatus, N'Outros') AS GrupoStatus,
         ISNULL(st.EhDependenciaTerceiro, 0) AS EhDependenciaTerceiro,
@@ -868,33 +868,42 @@ Datas AS (
 Abertos AS (
     SELECT 
         CAST(DataCriacao AS DATE) AS Data,
-        ISNULL(Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe') AS Equipe,
         COUNT(1) AS QtdAbertos
     FROM core.Fato_Ticket
     WHERE DataCriacao IS NOT NULL
-    GROUP BY CAST(DataCriacao AS DATE), ISNULL(Equipe, N'Sem Equipe')
+    GROUP BY CAST(DataCriacao AS DATE), ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe')
 ),
 Resolvidos AS (
     SELECT 
         CAST(DataResolucao AS DATE) AS Data,
-        ISNULL(Equipe, N'Sem Equipe') AS Equipe,
+        ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe') AS Equipe,
         COUNT(1) AS QtdResolvidos
     FROM core.Fato_Ticket
     WHERE DataResolucao IS NOT NULL
-    GROUP BY CAST(DataResolucao AS DATE), ISNULL(Equipe, N'Sem Equipe')
+    GROUP BY CAST(DataResolucao AS DATE), ISNULL(NULLIF(LTRIM(RTRIM(Equipe)), N''), N'Sem Equipe')
+),
+Equipes AS (
+    SELECT ISNULL(NULLIF(LTRIM(RTRIM(Nome)), N''), N'Sem Equipe') AS Equipe
+    FROM core.Dim_Equipe
+    WHERE EhSuporte = 1
+    UNION
+    SELECT Equipe FROM Abertos
+    UNION
+    SELECT Equipe FROM Resolvidos
 )
 SELECT 
     d.Data,
     d.AnoMes,
     d.EhDiaUtil,
-    eq.Nome AS Equipe,
+    eq.Equipe,
     ISNULL(a.QtdAbertos, 0) AS Abertos,
     ISNULL(r.QtdResolvidos, 0) AS Resolvidos,
     ISNULL(r.QtdResolvidos, 0) - ISNULL(a.QtdAbertos, 0) AS SaldoLiquido
 FROM Datas d
-CROSS JOIN (SELECT Nome FROM core.Dim_Equipe WHERE EhSuporte = 1) eq
-LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Nome = a.Equipe
-LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Nome = r.Equipe;
+CROSS JOIN Equipes eq
+LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Equipe = a.Equipe
+LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Equipe = r.Equipe;
 GO
 
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
@@ -907,7 +916,7 @@ SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     COUNT(t.TicketId) AS TotalTicketsHistorico,
     COUNT(CASE WHEN t.TicketId IS NOT NULL AND ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
     COUNT(CASE WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
@@ -930,14 +939,14 @@ GROUP BY
     c.ClienteId,
     c.Nome,
     c.RazaoSocial,
-    ISNULL(t.Equipe, N'Sem Equipe'),
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
     p.DiasSilenciosoCritico;
 GO
 
 CREATE OR ALTER VIEW mart.vw_MapaDemanda
 AS
 SELECT 
-    ISNULL(t.Equipe, N'Sem Equipe') AS Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
     ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
@@ -948,7 +957,12 @@ SELECT
 FROM core.Fato_Ticket t
 LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
 LEFT JOIN core.Fato_CampoCustomizado cf ON t.TicketId = cf.TicketId AND cf.CampoId = 133948
-GROUP BY ISNULL(t.Equipe, N'Sem Equipe'), ISNULL(t.ServicoN1, N'Não Informado'), t.Categoria, t.Urgencia, ISNULL(cf.Valor, N'Não Informada');
+GROUP BY
+    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe'),
+    ISNULL(t.ServicoN1, N'Não Informado'),
+    t.Categoria,
+    t.Urgencia,
+    ISNULL(cf.Valor, N'Não Informada');
 GO
 
 CREATE OR ALTER VIEW mart.vw_BacklogEvolucao
@@ -958,7 +972,7 @@ SELECT
     cal.AnoMes,
     cal.NomeDiaSemana,
     cal.EhDiaUtil,
-    sb.Equipe,
+    ISNULL(NULLIF(LTRIM(RTRIM(sb.Equipe)), N''), N'Sem Equipe') AS Equipe,
     sb.AgenteId,
     ISNULL(ag.Nome, N'Não Atribuído') AS Analista,
     sb.Status,
