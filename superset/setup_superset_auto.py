@@ -58,7 +58,7 @@ MART_VIEWS: List[Tuple[str, Optional[str], str]] = [
     ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
     ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes por Produto/Serviço e Dono Atual (Último Ticket), % SLA e Risco de Churn (> 60d)"),
     ("vw_MapaDemanda", None, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
-    ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período"),
+    ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização, Serviço e Equipe no Período"),
 ]
 
 
@@ -345,6 +345,43 @@ def ensure_sql_views_updated(db_uri: str) -> None:
         )
         status_fixed = cur.rowcount or 0
 
+        # 1c. Garante índices covering de alta performance para Raio-X e Clientes por Período
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM sys.indexes
+            WHERE name IN (
+                N'IX_core_Dim_Cliente_RaioX',
+                N'IX_core_Fato_Ticket_Empresa_RaioX',
+                N'IX_core_Fato_Ticket_DataCriacao_Clientes'
+            );
+            """
+        )
+        row_idx = cur.fetchone()
+        idx_count = int(row_idx[0] or 0) if row_idx else 0
+        created_indexes = False
+        if idx_count < 3:
+            cur.execute(
+                """
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Dim_Cliente_RaioX' AND object_id = OBJECT_ID(N'core.Dim_Cliente'))
+                    CREATE INDEX IX_core_Dim_Cliente_RaioX
+                        ON core.Dim_Cliente (Ativo, TipoPessoa, EmpresaId)
+                        INCLUDE (Nome, RazaoSocial);
+
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_Empresa_RaioX' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+                    CREATE INDEX IX_core_Fato_Ticket_Empresa_RaioX
+                        ON core.Fato_Ticket (EmpresaId, ServicoN1, DataCriacao DESC)
+                        INCLUDE (Equipe, Status, StatusBase, DataResolucao, SlaDataSolucao);
+
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_DataCriacao_Clientes' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+                    CREATE INDEX IX_core_Fato_Ticket_DataCriacao_Clientes
+                        ON core.Fato_Ticket (DataCriacao)
+                        INCLUDE (EmpresaId, Equipe, ServicoN1, Status, StatusBase, AgenteId, Categoria, Urgencia, Protocolo);
+                """
+            )
+            created_indexes = True
+            print("[OK] Índices covering do Raio-X e Clientes por Período garantidos no MovideskDM.", flush=True)
+
         # 2. Garante procedure core.usp_AtualizarSnapshotBacklog corrigida (st.PausaSla + StatusBase)
         cur.execute(
             """
@@ -516,10 +553,11 @@ END;
             "vw_clienteraiox": {"equipe", "servico"},
             "vw_mapademanda": {"equipe", "servico"},
             "vw_backlogevolucao": {"equipe"},
-            "vw_ticketsporclienteperiodo": {"equipe", "cliente", "dataabertura"},
+            "vw_ticketsporclienteperiodo": {"equipe", "servico", "cliente", "dataabertura"},
         }
 
         views_to_update: List[str] = []
+        backlog_rules_updated = False
         for v, req in required_view_cols.items():
             v_def_lower = view_defs.get(v, "").lower()
             has_old_ehfinal = (
@@ -527,22 +565,35 @@ END;
                 and "isnull(st.ehfinal, case" in v_def_lower
             )
             missing_pausa = v in ("vw_visaogeralkpis", "vw_slaradar") and "st.pausasla" not in v_def_lower
-            missing_dono_atual = v == "vw_clienteraiox" and "donoatual" not in v_def_lower
+            missing_resumo_raiox = v == "vw_clienteraiox" and "resumotickets" not in v_def_lower
+            missing_servico_norm = (
+                v == "vw_ticketsporclienteperiodo"
+                and "nullif(ltrim(rtrim(t.servicon1))" not in v_def_lower
+            )
+            needs_col = v not in view_cols or not req.issubset(view_cols[v])
             if (
-                v not in view_cols
-                or not req.issubset(view_cols[v])
+                needs_col
                 or has_old_ehfinal
                 or missing_pausa
-                or missing_dono_atual
+                or missing_resumo_raiox
+                or missing_servico_norm
             ):
                 views_to_update.append(v)
+                if has_old_ehfinal or missing_pausa or (needs_col and v in ("vw_visaogeralkpis", "vw_backlogevolucao")):
+                    backlog_rules_updated = True
 
         if not views_to_update and not proc_updated and status_fixed == 0:
             conn.close()
-            print(
-                "[OK] Todas as 9 Views do schema 'mart' validadas com filtro 'Equipe' e regras Backlog/SLA íntegras.",
-                flush=True,
-            )
+            if created_indexes:
+                print(
+                    "[OK] Índices covering criados e todas as 9 Views do schema 'mart' validadas e íntegras.",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[OK] Todas as 9 Views do schema 'mart' e índices de performance validados com filtro 'Equipe'/'Servico' íntegros.",
+                    flush=True,
+                )
             return
 
         views_ddl: Dict[str, str] = {
@@ -794,77 +845,77 @@ LEFT JOIN Abertos a ON d.Data = a.Data AND eq.Equipe = a.Equipe
 LEFT JOIN Resolvidos r ON d.Data = r.Data AND eq.Equipe = r.Equipe;
 """,
             "vw_clienteraiox": """
--- Ajustado por Jefferson Gonçalves em 15/11/2026 para redefinir a posse do cliente com base no último ticket por produto
+-- Ajustado por Jefferson Gonçalves em 15/11/2026 e otimizado para single-pass scan (ResumoTickets) sem ROW_NUMBER / Nested Loops
 CREATE OR ALTER VIEW mart.vw_ClienteRaioX
 AS
 WITH Parametros AS (
-    SELECT ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+    SELECT ISNULL(MAX(TRY_CAST(Valor AS INT)), 60) AS DiasSilenciosoCritico
+    FROM ctl.Parametro
+    WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO'
 ),
-TicketsBase AS (
+ResumoTickets AS (
     SELECT
-        t.TicketId,
         t.EmpresaId,
-        ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
-        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
-        t.DataCriacao,
-        t.DataResolucao,
-        t.SlaDataSolucao,
-        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal
+        ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado') AS Servico,
+        COUNT(t.TicketId) AS TotalTicketsHistorico,
+        COUNT(CASE
+            WHEN CASE
+                WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+                ELSE ISNULL(st.EhFinal, 0)
+            END = 0 THEN 1
+        END) AS TicketsAtualmenteAbertos,
+        COUNT(CASE
+            WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1
+        END) AS TicketsDentroSla,
+        COUNT(CASE
+            WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1
+        END) AS TotalSlaValido,
+        MAX(t.DataCriacao) AS DataUltimoTicket,
+        CAST(
+            SUBSTRING(
+                MAX(
+                    CONVERT(CHAR(19), ISNULL(t.DataCriacao, CONVERT(DATETIME2(0), '1900-01-01T00:00:00', 126)), 126) + N'|' +
+                    RIGHT(REPLICATE(N'0', 10) + CAST(ABS(CAST(t.TicketId AS BIGINT)) AS NVARCHAR(12)), 10) + N'|' +
+                    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe')
+                ),
+                32,
+                128
+            )
+            AS NVARCHAR(128)
+        ) AS EquipeAtual
     FROM core.Fato_Ticket t
     LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
-),
--- Identifica o último chamado para cada combinação de Cliente + Serviço
-UltimoTicket AS (
-    SELECT
-        EmpresaId,
-        Servico,
-        Equipe AS EquipeAtual,
-        DataCriacao AS DataUltimoTicket,
-        ROW_NUMBER() OVER(PARTITION BY EmpresaId, Servico ORDER BY DataCriacao DESC) AS rn
-    FROM TicketsBase
-),
--- Isola apenas a linha mais recente (rn = 1) que ditará quem é o Dono Atual
-DonoAtual AS (
-    SELECT EmpresaId, Servico, EquipeAtual, DataUltimoTicket
-    FROM UltimoTicket
-    WHERE rn = 1
-),
--- Agrega os históricos de saúde separadamente mantendo a granularidade
-Agregacao AS (
-    SELECT
-        EmpresaId,
-        Servico,
-        COUNT(TicketId) AS TotalTicketsHistorico,
-        COUNT(CASE WHEN EhFinal = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
-        COUNT(CASE WHEN DataResolucao IS NOT NULL AND DataResolucao <= SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
-        COUNT(CASE WHEN DataResolucao IS NOT NULL AND SlaDataSolucao IS NOT NULL THEN 1 END) AS TotalSlaValido
-    FROM TicketsBase
-    GROUP BY EmpresaId, Servico
+    WHERE t.EmpresaId IS NOT NULL
+    GROUP BY
+        t.EmpresaId,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado')
 )
 SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(d.Servico, N'Sem Serviço') AS Servico,
-    ISNULL(d.EquipeAtual, N'Sem Equipe') AS Equipe,
-    ISNULL(a.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
-    ISNULL(a.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
-    ISNULL(a.TicketsDentroSla, 0) AS TicketsDentroSla,
-    CAST(ROUND(100.0 * a.TicketsDentroSla / NULLIF(a.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
-    d.DataUltimoTicket,
-    DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
+    ISNULL(r.Servico, N'Sem Serviço') AS Servico,
+    ISNULL(r.EquipeAtual, N'Sem Equipe') AS Equipe,
+    ISNULL(r.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
+    ISNULL(r.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
+    ISNULL(r.TicketsDentroSla, 0) AS TicketsDentroSla,
+    CAST(ROUND(100.0 * r.TicketsDentroSla / NULLIF(r.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
+    r.DataUltimoTicket,
+    DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
     CASE
-        WHEN d.DataUltimoTicket IS NULL OR DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
-        WHEN DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
+        WHEN r.DataUltimoTicket IS NULL OR DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
+        WHEN DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
         ELSE 'Ativo (< 30d)'
     END AS StatusRelacionamento
 FROM core.Dim_Cliente c
-LEFT JOIN DonoAtual d ON c.ClienteId = d.EmpresaId
-LEFT JOIN Agregacao a ON c.ClienteId = a.EmpresaId AND d.Servico = a.Servico
+LEFT JOIN ResumoTickets r ON c.ClienteId = r.EmpresaId
 CROSS JOIN Parametros p
 WHERE
-    (ISNULL(c.TipoPessoa, 2) IN (2, 4) OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId)))
-    AND ISNULL(c.Ativo, 1) = 1;
+    ISNULL(c.Ativo, 1) = 1
+    AND (
+        ISNULL(c.TipoPessoa, 2) IN (2, 4)
+        OR (c.EmpresaId IS NULL AND r.EmpresaId IS NOT NULL)
+    );
 """,
             "vw_mapademanda": """
 CREATE OR ALTER VIEW mart.vw_MapaDemanda
@@ -930,7 +981,7 @@ SELECT
         WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') OR ISNULL(st.EhFinal, 0) = 1 THEN N'Encerrado'
         ELSE N'Em Aberto'
     END AS Situacao,
-    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
     1 AS QtdTickets
@@ -946,13 +997,13 @@ WHERE t.DataCriacao IS NOT NULL;
         for mv in views_to_update:
             cur.execute(views_ddl[mv])
 
-        if status_fixed > 0 or proc_updated or views_to_update:
+        if status_fixed > 0 or proc_updated or backlog_rules_updated:
             cur.execute("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;")
 
         conn.close()
-        if views_to_update:
+        if created_indexes or views_to_update:
             print(
-                f"[OK] Views atualizadas no SQL Server ({', '.join(views_to_update)}) com filtro 'Equipe' e correção de Backlog/SLA.",
+                f"[OK] Índices covering e Views atualizados no SQL Server ({', '.join(views_to_update) or 'índices'}) com otimização single-pass e filtro 'Equipe'/'Servico'.",
                 flush=True,
             )
     except Exception:
@@ -1687,14 +1738,14 @@ def build_movidesk_dashboard(
             },
             "Saúde da carteira de clientes por Produto/Serviço e Equipe Atual (Dono Atual), ordenada do cliente há mais tempo sem abrir chamado ao mais recente.",
         ),
-        # Row 6: Pizza/Donut Tickets Abertos por Cliente (Organização) + Grid Detalhado no Período
+        # Row 6: Pizza/Donut Tickets Abertos por Cliente (Organização) e Serviço + Grid Detalhado no Período
         (
             "PIE_TICKETS_CLIENTE",
             "Tickets Abertos por Cliente (Organização)",
             "pie",
             ds_clientes_periodo["id"],
             {
-                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente"]),
+                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente", "Servico"]),
                 "metric": make_simple_metric(ds_clientes_periodo, "QtdTickets", "SUM", "Tickets"),
                 "adhoc_filters": [
                     {
@@ -1710,7 +1761,7 @@ def build_movidesk_dashboard(
                         "subject": "DataAbertura",
                     }
                 ],
-                "row_limit": 100,
+                "row_limit": 200,
                 "sort_by_metric": True,
                 "color_scheme": "supersetColors",
                 "show_legend": True,
@@ -1728,7 +1779,7 @@ def build_movidesk_dashboard(
                 "innerRadius": 30,
                 "outerRadius": 70,
             },
-            "Distribuição em Donut dos tickets abertos por Cliente (Organização) no período selecionado (padrão: Este mês), filtrável por Equipe.",
+            "Distribuição em Donut dos tickets abertos por Cliente (Organização) e Serviço no período selecionado (padrão: Este mês), respeitando os filtros de Equipe e Serviço.",
         ),
         (
             "TABELA_TICKETS_CLIENTE_PERIODO",
@@ -1737,7 +1788,7 @@ def build_movidesk_dashboard(
             ds_clientes_periodo["id"],
             {
                 "query_mode": "aggregate",
-                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente"]),
+                "groupby": filter_existing_cols(ds_clientes_periodo, ["Cliente", "Servico"]),
                 "metrics": [
                     make_simple_metric(ds_clientes_periodo, "QtdTickets", "SUM", "Qtd Tickets"),
                 ],
@@ -1782,7 +1833,7 @@ def build_movidesk_dashboard(
                     "%Total": {"d3NumberFormat": ".1%"},
                 },
             },
-            "Ranking detalhado de tickets abertos por Cliente no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.",
+            "Ranking detalhado de tickets abertos por Cliente e Serviço no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.",
         ),
     ]
 
@@ -1892,8 +1943,8 @@ def build_movidesk_dashboard(
         "TABELA_STATUS_AGING": ("ROW-AGING", 5, 44),
         "TABELA_MAPA_DEMANDA": ("ROW-DEMANDA-CLIENTES", 6, 44),
         "TABELA_CLIENTE_RAIOX": ("ROW-DEMANDA-CLIENTES", 6, 44),
-        "PIE_TICKETS_CLIENTE": ("ROW-CLIENTES-PERIODO", 7, 46),
-        "TABELA_TICKETS_CLIENTE_PERIODO": ("ROW-CLIENTES-PERIODO", 5, 46),
+        "PIE_TICKETS_CLIENTE": ("ROW-CLIENTES-PERIODO", 6, 46),
+        "TABELA_TICKETS_CLIENTE_PERIODO": ("ROW-CLIENTES-PERIODO", 6, 46),
     }
 
     for key, (row_id, width, height) in layout_dims.items():
@@ -1936,31 +1987,91 @@ def build_movidesk_dashboard(
     if not isinstance(native_filters, list):
         native_filters = []
 
-    has_equipe_filter = False
+    all_chart_ids = sorted(meta["id"] for meta in created_meta.values())
+    servico_chart_keys = {
+        "TABELA_RADAR_SLA",
+        "TABELA_BACKLOG_AGING",
+        "TABELA_MAPA_DEMANDA",
+        "TABELA_CLIENTE_RAIOX",
+        "PIE_TICKETS_CLIENTE",
+        "TABELA_TICKETS_CLIENTE_PERIODO",
+    }
+    in_scope_for_servico = sorted(
+        meta["id"] for key, meta in created_meta.items() if key in servico_chart_keys
+    )
+    excluded_for_servico = sorted(
+        meta["id"] for key, meta in created_meta.items() if key not in servico_chart_keys
+    )
+    in_scope_for_period = sorted(
+        meta["id"]
+        for key, meta in created_meta.items()
+        if key in ("PIE_TICKETS_CLIENTE", "TABELA_TICKETS_CLIENTE_PERIODO")
+    )
+    excluded_for_period = sorted(
+        meta["id"]
+        for key, meta in created_meta.items()
+        if key not in ("PIE_TICKETS_CLIENTE", "TABELA_TICKETS_CLIENTE_PERIODO")
+    )
+
+    equipe_filter_id = "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
     period_filter_id = "NATIVE_FILTER-b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    servico_filter_id = "NATIVE_FILTER-c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f"
+
+    existing_equipe_filter: Optional[Dict[str, Any]] = None
+    existing_servico_filter: Optional[Dict[str, Any]] = None
     existing_period_filter: Optional[Dict[str, Any]] = None
+
+    def _has_target_column(nf_obj: Dict[str, Any], target_col: str) -> bool:
+        for tgt in nf_obj.get("targets", []) or []:
+            col = tgt.get("column") if isinstance(tgt, dict) else None
+            if isinstance(col, dict) and str(col.get("name", "")).lower() == target_col.lower():
+                return True
+        return False
 
     for nf in native_filters:
         if not isinstance(nf, dict):
             continue
         nf_id = str(nf.get("id", ""))
         nf_name = str(nf.get("name", ""))
-        if nf_id.lower() == period_filter_id.lower() or nf_name.lower() == "período (tickets por cliente)":
+        if existing_period_filter is None and (
+            nf_id.lower() == period_filter_id.lower()
+            or nf_name.lower() == "período (tickets por cliente)"
+        ):
             existing_period_filter = nf
 
-        if nf_name.lower() == "equipe":
-            has_equipe_filter = True
-        else:
-            for tgt in nf.get("targets", []) or []:
-                col = tgt.get("column") if isinstance(tgt, dict) else None
-                if isinstance(col, dict) and str(col.get("name", "")).lower() == "equipe":
-                    has_equipe_filter = True
-                    break
+        if existing_equipe_filter is None and (
+            nf_id.lower() == equipe_filter_id.lower()
+            or nf_name.lower() == "equipe"
+            or _has_target_column(nf, "equipe")
+        ):
+            existing_equipe_filter = nf
 
-    if not has_equipe_filter:
+        if existing_servico_filter is None and (
+            nf_id.lower() == servico_filter_id.lower()
+            or nf_name.lower() in ("serviço", "servico")
+            or _has_target_column(nf, "servico")
+        ):
+            existing_servico_filter = nf
+
+    # Em Superset 6.1.0, chartsInScope precisa listar explícita e integralmente todos os gráficos em escopo
+    if existing_equipe_filter is not None:
+        existing_equipe_filter["scope"] = {
+            "rootPath": ["ROOT_ID"],
+            "excluded": [],
+        }
+        existing_equipe_filter["chartsInScope"] = list(all_chart_ids)
+        existing_equipe_filter["tabsInScope"] = []
+        if not existing_equipe_filter.get("targets"):
+            existing_equipe_filter["targets"] = [
+                {
+                    "datasetId": ds_kpis["id"],
+                    "column": {"name": "Equipe"},
+                }
+            ]
+    else:
         native_filters.append(
             {
-                "id": "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+                "id": equipe_filter_id,
                 "name": "Equipe",
                 "filterType": "filter_select",
                 "targets": [
@@ -1986,25 +2097,70 @@ def build_movidesk_dashboard(
                     "rootPath": ["ROOT_ID"],
                     "excluded": [],
                 },
+                "chartsInScope": list(all_chart_ids),
+                "tabsInScope": [],
                 "type": "NATIVE_FILTER",
-                "description": "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*).",
+                "description": "Filtro global de Equipe aplicado em todos os 15 gráficos e views (mart.*).",
             }
         )
 
-    excluded_for_period = [
-        meta["id"]
-        for key, meta in created_meta.items()
-        if key not in ("PIE_TICKETS_CLIENTE", "TABELA_TICKETS_CLIENTE_PERIODO")
-    ]
-    if existing_period_filter is not None:
-        scope_obj = existing_period_filter.get("scope")
-        if isinstance(scope_obj, dict):
-            scope_obj["excluded"] = excluded_for_period
-        else:
-            existing_period_filter["scope"] = {
-                "rootPath": ["ROOT_ID"],
-                "excluded": excluded_for_period,
+    if existing_servico_filter is not None:
+        existing_servico_filter["scope"] = {
+            "rootPath": ["ROOT_ID"],
+            "excluded": list(excluded_for_servico),
+        }
+        existing_servico_filter["chartsInScope"] = list(in_scope_for_servico)
+        existing_servico_filter["tabsInScope"] = []
+        if not existing_servico_filter.get("targets"):
+            existing_servico_filter["targets"] = [
+                {
+                    "datasetId": ds_demanda["id"],
+                    "column": {"name": "Servico"},
+                }
+            ]
+    else:
+        native_filters.append(
+            {
+                "id": servico_filter_id,
+                "name": "Serviço",
+                "filterType": "filter_select",
+                "targets": [
+                    {
+                        "datasetId": ds_demanda["id"],
+                        "column": {"name": "Servico"},
+                    }
+                ],
+                "defaultDataMask": {
+                    "extraFormData": {},
+                    "filterState": {},
+                    "ownState": {},
+                },
+                "controlValues": {
+                    "enableEmptyFilter": False,
+                    "defaultToFirstItem": False,
+                    "multiSelect": True,
+                    "searchAllOptions": False,
+                    "inverseSelection": False,
+                },
+                "cascadeParentIds": [],
+                "scope": {
+                    "rootPath": ["ROOT_ID"],
+                    "excluded": list(excluded_for_servico),
+                },
+                "chartsInScope": list(in_scope_for_servico),
+                "tabsInScope": [],
+                "type": "NATIVE_FILTER",
+                "description": "Filtro global de Produto/Serviço aplicado ao Radar SLA, Aging, Demanda, Raio-X e Clientes por Período.",
             }
+        )
+
+    if existing_period_filter is not None:
+        existing_period_filter["scope"] = {
+            "rootPath": ["ROOT_ID"],
+            "excluded": list(excluded_for_period),
+        }
+        existing_period_filter["chartsInScope"] = list(in_scope_for_period)
+        existing_period_filter["tabsInScope"] = []
     else:
         native_filters.append(
             {
@@ -2023,10 +2179,12 @@ def build_movidesk_dashboard(
                 "cascadeParentIds": [],
                 "scope": {
                     "rootPath": ["ROOT_ID"],
-                    "excluded": excluded_for_period,
+                    "excluded": list(excluded_for_period),
                 },
+                "chartsInScope": list(in_scope_for_period),
+                "tabsInScope": [],
                 "type": "NATIVE_FILTER",
-                "description": "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente (padrão inicial: Este mês).",
+                "description": "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente e Serviço (padrão inicial: Este mês).",
             }
         )
 

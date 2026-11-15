@@ -48,7 +48,7 @@ public sealed class SupersetService : IDisposable
         ("vw_ThroughputDiario", "Data", "Balanço Diário de Vazão Operacional (Abertos vs Resolvidos)"),
         ("vw_ClienteRaioX", "DataUltimoTicket", "Saúde de Empresas Clientes por Produto/Serviço e Dono Atual (Último Ticket), % SLA e Risco de Churn (> 60d)"),
         ("vw_MapaDemanda", null, "Pareto de Serviços, Categorias, Urgências e Versões de Release (#133948)"),
-        ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização e Equipe no Período")
+        ("vw_TicketsPorClientePeriodo", "DataAbertura", "Distribuição de Tickets Abertos por Cliente/Organização, Serviço e Equipe no Período")
     ];
 
     public SupersetStatus Status { get; private set; } = SupersetStatus.Offline;
@@ -1299,7 +1299,7 @@ public sealed class SupersetService : IDisposable
 
             ("PIE_TICKETS_CLIENTE", "Tickets Abertos por Cliente (Organização)", "pie", dsClientesPeriodo.Id, new JsonObject
             {
-                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente"),
+                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente", "Servico"),
                 ["metric"] = MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Tickets"),
                 ["adhoc_filters"] = new JsonArray(
                     new JsonObject
@@ -1315,7 +1315,7 @@ public sealed class SupersetService : IDisposable
                         ["sqlExpression"] = null,
                         ["subject"] = "DataAbertura"
                     }),
-                ["row_limit"] = 100,
+                ["row_limit"] = 200,
                 ["sort_by_metric"] = true,
                 ["color_scheme"] = "supersetColors",
                 ["show_legend"] = true,
@@ -1332,12 +1332,12 @@ public sealed class SupersetService : IDisposable
                 ["donut"] = true,
                 ["innerRadius"] = 30,
                 ["outerRadius"] = 70
-            }, "Distribuição em Donut dos tickets abertos por Cliente (Organização) no período selecionado (padrão: Este mês), filtrável por Equipe."),
+            }, "Distribuição em Donut dos tickets abertos por Cliente (Organização) e Serviço no período selecionado (padrão: Este mês), respeitando os filtros de Equipe e Serviço."),
 
             ("TABELA_TICKETS_CLIENTE_PERIODO", "Detalhamento de Tickets por Cliente no Período", "table", dsClientesPeriodo.Id, new JsonObject
             {
                 ["query_mode"] = "aggregate",
-                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente"),
+                ["groupby"] = FilterExistingCols(dsClientesPeriodo, "Cliente", "Servico"),
                 ["metrics"] = new JsonArray(
                     MakeSimpleMetric(dsClientesPeriodo, "QtdTickets", "SUM", "Qtd Tickets")),
                 ["percent_metrics"] = new JsonArray(
@@ -1372,7 +1372,7 @@ public sealed class SupersetService : IDisposable
                     ["Qtd Tickets"] = new JsonObject { ["d3NumberFormat"] = ",d" },
                     ["%Total"] = new JsonObject { ["d3NumberFormat"] = ".1%" }
                 }
-            }, "Ranking detalhado de tickets abertos por Cliente no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.")
+            }, "Ranking detalhado de tickets abertos por Cliente e Serviço no período (Qtd Tickets, % do total e totalizador) para complementar o gráfico Donut.")
         };
 
         var createdMeta = new Dictionary<string, ChartMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -1471,8 +1471,8 @@ public sealed class SupersetService : IDisposable
             ("TABELA_STATUS_AGING", "ROW-AGING", 5, 44),
             ("TABELA_MAPA_DEMANDA", "ROW-DEMANDA-CLIENTES", 6, 44),
             ("TABELA_CLIENTE_RAIOX", "ROW-DEMANDA-CLIENTES", 6, 44),
-            ("PIE_TICKETS_CLIENTE", "ROW-CLIENTES-PERIODO", 7, 46),
-            ("TABELA_TICKETS_CLIENTE_PERIODO", "ROW-CLIENTES-PERIODO", 5, 46)
+            ("PIE_TICKETS_CLIENTE", "ROW-CLIENTES-PERIODO", 6, 46),
+            ("TABELA_TICKETS_CLIENTE_PERIODO", "ROW-CLIENTES-PERIODO", 6, 46)
         };
 
         foreach (var (key, rowId, width, height) in layoutDims)
@@ -1521,8 +1521,58 @@ public sealed class SupersetService : IDisposable
         jsonMetadata["cross_filters_enabled"] = true;
 
         var nativeFilters = jsonMetadata["native_filter_configuration"] as JsonArray ?? new JsonArray();
-        bool hasEquipeFilter = false;
+
+        static JsonArray ToIdArray(IEnumerable<int> ids)
+        {
+            var arr = new JsonArray();
+            foreach (int id in ids)
+            {
+                arr.Add(id);
+            }
+            return arr;
+        }
+
+        var allChartIds = createdMeta.Values.Select(m => m.Id).OrderBy(id => id).ToList();
+
+        var servicoChartKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "TABELA_RADAR_SLA",
+            "TABELA_BACKLOG_AGING",
+            "TABELA_MAPA_DEMANDA",
+            "TABELA_CLIENTE_RAIOX",
+            "PIE_TICKETS_CLIENTE",
+            "TABELA_TICKETS_CLIENTE_PERIODO"
+        };
+        var inScopeForServico = createdMeta
+            .Where(kv => servicoChartKeys.Contains(kv.Key))
+            .Select(kv => kv.Value.Id)
+            .OrderBy(id => id)
+            .ToList();
+        var excludedForServico = createdMeta
+            .Where(kv => !servicoChartKeys.Contains(kv.Key))
+            .Select(kv => kv.Value.Id)
+            .OrderBy(id => id)
+            .ToList();
+
+        var inScopeForPeriod = createdMeta
+            .Where(kv => string.Equals(kv.Key, "PIE_TICKETS_CLIENTE", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(kv.Key, "TABELA_TICKETS_CLIENTE_PERIODO", StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Value.Id)
+            .OrderBy(id => id)
+            .ToList();
+        var excludedForPeriod = createdMeta
+            .Where(kv => !string.Equals(kv.Key, "PIE_TICKETS_CLIENTE", StringComparison.OrdinalIgnoreCase) &&
+                         !string.Equals(kv.Key, "TABELA_TICKETS_CLIENTE_PERIODO", StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Value.Id)
+            .OrderBy(id => id)
+            .ToList();
+
+        const string equipeFilterId = "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
         const string periodFilterId = "NATIVE_FILTER-b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e";
+        const string servicoFilterId = "NATIVE_FILTER-c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f";
+
+        JsonObject? existingEquipeFilter = null;
+        JsonObject? existingServicoFilter = null;
         JsonObject? existingPeriodFilter = null;
 
         foreach (JsonNode? nfNode in nativeFilters)
@@ -1532,35 +1582,70 @@ public sealed class SupersetService : IDisposable
             string? nfId = nfObj["id"]?.GetValue<string>();
             string? nfName = nfObj["name"]?.GetValue<string>();
 
-            if (string.Equals(nfId, periodFilterId, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(nfName, "Período (Tickets por Cliente)", StringComparison.OrdinalIgnoreCase))
+            static bool HasTargetColumn(JsonObject obj, string targetColumn)
+            {
+                if (obj["targets"] is not JsonArray arr) return false;
+                foreach (JsonNode? tNode in arr)
+                {
+                    string? colName = tNode?["column"]?["name"]?.GetValue<string>();
+                    if (string.Equals(colName, targetColumn, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            if (existingPeriodFilter is null &&
+                (string.Equals(nfId, periodFilterId, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(nfName, "Período (Tickets por Cliente)", StringComparison.OrdinalIgnoreCase)))
             {
                 existingPeriodFilter = nfObj;
             }
 
-            if (string.Equals(nfName, "Equipe", StringComparison.OrdinalIgnoreCase))
+            if (existingEquipeFilter is null &&
+                (string.Equals(nfId, equipeFilterId, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(nfName, "Equipe", StringComparison.OrdinalIgnoreCase) ||
+                 HasTargetColumn(nfObj, "Equipe")))
             {
-                hasEquipeFilter = true;
+                existingEquipeFilter = nfObj;
             }
-            else if (nfObj["targets"] is JsonArray targetsArr)
+
+            if (existingServicoFilter is null &&
+                (string.Equals(nfId, servicoFilterId, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(nfName, "Serviço", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(nfName, "Servico", StringComparison.OrdinalIgnoreCase) ||
+                 HasTargetColumn(nfObj, "Servico")))
             {
-                foreach (JsonNode? tNode in targetsArr)
-                {
-                    string? colName = tNode?["column"]?["name"]?.GetValue<string>();
-                    if (string.Equals(colName, "Equipe", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasEquipeFilter = true;
-                        break;
-                    }
-                }
+                existingServicoFilter = nfObj;
             }
         }
 
-        if (!hasEquipeFilter)
+        // Em Superset 6.1.0, chartsInScope precisa listar explícita e integralmente todos os gráficos recém-criados
+        if (existingEquipeFilter is not null)
+        {
+            existingEquipeFilter["scope"] = new JsonObject
+            {
+                ["rootPath"] = new JsonArray("ROOT_ID"),
+                ["excluded"] = new JsonArray()
+            };
+            existingEquipeFilter["chartsInScope"] = ToIdArray(allChartIds);
+            existingEquipeFilter["tabsInScope"] = new JsonArray();
+            if (existingEquipeFilter["targets"] is not JsonArray tArr || tArr.Count == 0)
+            {
+                existingEquipeFilter["targets"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["datasetId"] = dsKpis.Id,
+                        ["column"] = new JsonObject { ["name"] = "Equipe" }
+                    });
+            }
+        }
+        else
         {
             nativeFilters.Add(new JsonObject
             {
-                ["id"] = "NATIVE_FILTER-a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+                ["id"] = equipeFilterId,
                 ["name"] = "Equipe",
                 ["filterType"] = "filter_select",
                 ["targets"] = new JsonArray(
@@ -1589,35 +1674,81 @@ public sealed class SupersetService : IDisposable
                     ["rootPath"] = new JsonArray("ROOT_ID"),
                     ["excluded"] = new JsonArray()
                 },
+                ["chartsInScope"] = ToIdArray(allChartIds),
+                ["tabsInScope"] = new JsonArray(),
                 ["type"] = "NATIVE_FILTER",
-                ["description"] = "Filtro global de Equipe aplicado em todos os gráficos e views (mart.*)."
+                ["description"] = "Filtro global de Equipe aplicado em todos os 15 gráficos e views (mart.*)."
             });
         }
 
-        var excludedForPeriod = new JsonArray();
-        foreach (var kv in createdMeta)
+        if (existingServicoFilter is not null)
         {
-            if (!string.Equals(kv.Key, "PIE_TICKETS_CLIENTE", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(kv.Key, "TABELA_TICKETS_CLIENTE_PERIODO", StringComparison.OrdinalIgnoreCase))
+            existingServicoFilter["scope"] = new JsonObject
             {
-                excludedForPeriod.Add(kv.Value.Id);
+                ["rootPath"] = new JsonArray("ROOT_ID"),
+                ["excluded"] = ToIdArray(excludedForServico)
+            };
+            existingServicoFilter["chartsInScope"] = ToIdArray(inScopeForServico);
+            existingServicoFilter["tabsInScope"] = new JsonArray();
+            if (existingServicoFilter["targets"] is not JsonArray tArr || tArr.Count == 0)
+            {
+                existingServicoFilter["targets"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["datasetId"] = dsDemanda.Id,
+                        ["column"] = new JsonObject { ["name"] = "Servico" }
+                    });
             }
+        }
+        else
+        {
+            nativeFilters.Add(new JsonObject
+            {
+                ["id"] = servicoFilterId,
+                ["name"] = "Serviço",
+                ["filterType"] = "filter_select",
+                ["targets"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["datasetId"] = dsDemanda.Id,
+                        ["column"] = new JsonObject { ["name"] = "Servico" }
+                    }),
+                ["defaultDataMask"] = new JsonObject
+                {
+                    ["extraFormData"] = new JsonObject(),
+                    ["filterState"] = new JsonObject(),
+                    ["ownState"] = new JsonObject()
+                },
+                ["controlValues"] = new JsonObject
+                {
+                    ["enableEmptyFilter"] = false,
+                    ["defaultToFirstItem"] = false,
+                    ["multiSelect"] = true,
+                    ["searchAllOptions"] = false,
+                    ["inverseSelection"] = false
+                },
+                ["cascadeParentIds"] = new JsonArray(),
+                ["scope"] = new JsonObject
+                {
+                    ["rootPath"] = new JsonArray("ROOT_ID"),
+                    ["excluded"] = ToIdArray(excludedForServico)
+                },
+                ["chartsInScope"] = ToIdArray(inScopeForServico),
+                ["tabsInScope"] = new JsonArray(),
+                ["type"] = "NATIVE_FILTER",
+                ["description"] = "Filtro global de Produto/Serviço aplicado ao Radar SLA, Aging, Demanda, Raio-X e Clientes por Período."
+            });
         }
 
         if (existingPeriodFilter is not null)
         {
-            if (existingPeriodFilter["scope"] is JsonObject scopeObj)
+            existingPeriodFilter["scope"] = new JsonObject
             {
-                scopeObj["excluded"] = excludedForPeriod;
-            }
-            else
-            {
-                existingPeriodFilter["scope"] = new JsonObject
-                {
-                    ["rootPath"] = new JsonArray("ROOT_ID"),
-                    ["excluded"] = excludedForPeriod
-                };
-            }
+                ["rootPath"] = new JsonArray("ROOT_ID"),
+                ["excluded"] = ToIdArray(excludedForPeriod)
+            };
+            existingPeriodFilter["chartsInScope"] = ToIdArray(inScopeForPeriod);
+            existingPeriodFilter["tabsInScope"] = new JsonArray();
         }
         else
         {
@@ -1641,14 +1772,19 @@ public sealed class SupersetService : IDisposable
                 ["scope"] = new JsonObject
                 {
                     ["rootPath"] = new JsonArray("ROOT_ID"),
-                    ["excluded"] = excludedForPeriod
+                    ["excluded"] = ToIdArray(excludedForPeriod)
                 },
+                ["chartsInScope"] = ToIdArray(inScopeForPeriod),
+                ["tabsInScope"] = new JsonArray(),
                 ["type"] = "NATIVE_FILTER",
-                ["description"] = "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente (padrão inicial: Este mês)."
+                ["description"] = "Filtro de Data de Abertura aplicado ao Donut e ao Grid de Tickets por Cliente e Serviço (padrão inicial: Este mês)."
             });
         }
 
-        jsonMetadata["native_filter_configuration"] = nativeFilters;
+        if (!ReferenceEquals(jsonMetadata["native_filter_configuration"], nativeFilters))
+        {
+            jsonMetadata["native_filter_configuration"] = nativeFilters;
+        }
 
         await SendJsonCheckedAsync(
             apiClient,

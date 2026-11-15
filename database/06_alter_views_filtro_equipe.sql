@@ -275,77 +275,77 @@ GO
 /* ----------------------------------------------------------------------------
    6. mart.vw_ClienteRaioX
 ---------------------------------------------------------------------------- */
--- Ajustado por Jefferson Gonçalves em 15/11/2026 para redefinir a posse do cliente com base no último ticket por produto
+-- Ajustado por Jefferson Gonçalves em 15/11/2026 e otimizado para single-pass scan (ResumoTickets) sem ROW_NUMBER / Nested Loops
 ALTER VIEW mart.vw_ClienteRaioX
 AS
 WITH Parametros AS (
-    SELECT ISNULL(TRY_CAST((SELECT Valor FROM ctl.Parametro WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO') AS INT), 60) AS DiasSilenciosoCritico
+    SELECT ISNULL(MAX(TRY_CAST(Valor AS INT)), 60) AS DiasSilenciosoCritico
+    FROM ctl.Parametro
+    WHERE Chave = 'DIAS_CLIENTE_SILENCIOSO'
 ),
-TicketsBase AS (
+ResumoTickets AS (
     SELECT
-        t.TicketId,
         t.EmpresaId,
-        ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
-        ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe') AS Equipe,
-        t.DataCriacao,
-        t.DataResolucao,
-        t.SlaDataSolucao,
-        ISNULL(st.EhFinal, CASE WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1 ELSE 0 END) AS EhFinal
+        ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado') AS Servico,
+        COUNT(t.TicketId) AS TotalTicketsHistorico,
+        COUNT(CASE
+            WHEN CASE
+                WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') THEN 1
+                ELSE ISNULL(st.EhFinal, 0)
+            END = 0 THEN 1
+        END) AS TicketsAtualmenteAbertos,
+        COUNT(CASE
+            WHEN t.DataResolucao IS NOT NULL AND t.DataResolucao <= t.SlaDataSolucao THEN 1
+        END) AS TicketsDentroSla,
+        COUNT(CASE
+            WHEN t.DataResolucao IS NOT NULL AND t.SlaDataSolucao IS NOT NULL THEN 1
+        END) AS TotalSlaValido,
+        MAX(t.DataCriacao) AS DataUltimoTicket,
+        CAST(
+            SUBSTRING(
+                MAX(
+                    CONVERT(CHAR(19), ISNULL(t.DataCriacao, CONVERT(DATETIME2(0), '1900-01-01T00:00:00', 126)), 126) + N'|' +
+                    RIGHT(REPLICATE(N'0', 10) + CAST(ABS(CAST(t.TicketId AS BIGINT)) AS NVARCHAR(12)), 10) + N'|' +
+                    ISNULL(NULLIF(LTRIM(RTRIM(t.Equipe)), N''), N'Sem Equipe')
+                ),
+                32,
+                128
+            )
+            AS NVARCHAR(128)
+        ) AS EquipeAtual
     FROM core.Fato_Ticket t
     LEFT JOIN core.Dim_Status st ON t.Status = st.Nome
-),
--- Identifica o último chamado para cada combinação de Cliente + Serviço
-UltimoTicket AS (
-    SELECT
-        EmpresaId,
-        Servico,
-        Equipe AS EquipeAtual,
-        DataCriacao AS DataUltimoTicket,
-        ROW_NUMBER() OVER(PARTITION BY EmpresaId, Servico ORDER BY DataCriacao DESC) AS rn
-    FROM TicketsBase
-),
--- Isola apenas a linha mais recente (rn = 1) que ditará quem é o Dono Atual
-DonoAtual AS (
-    SELECT EmpresaId, Servico, EquipeAtual, DataUltimoTicket
-    FROM UltimoTicket
-    WHERE rn = 1
-),
--- Agrega os históricos de saúde separadamente mantendo a granularidade
-Agregacao AS (
-    SELECT
-        EmpresaId,
-        Servico,
-        COUNT(TicketId) AS TotalTicketsHistorico,
-        COUNT(CASE WHEN EhFinal = 0 THEN 1 END) AS TicketsAtualmenteAbertos,
-        COUNT(CASE WHEN DataResolucao IS NOT NULL AND DataResolucao <= SlaDataSolucao THEN 1 END) AS TicketsDentroSla,
-        COUNT(CASE WHEN DataResolucao IS NOT NULL AND SlaDataSolucao IS NOT NULL THEN 1 END) AS TotalSlaValido
-    FROM TicketsBase
-    GROUP BY EmpresaId, Servico
+    WHERE t.EmpresaId IS NOT NULL
+    GROUP BY
+        t.EmpresaId,
+        ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado')
 )
 SELECT
     c.ClienteId,
     c.Nome AS Cliente,
     c.RazaoSocial,
-    ISNULL(d.Servico, N'Sem Serviço') AS Servico,
-    ISNULL(d.EquipeAtual, N'Sem Equipe') AS Equipe,
-    ISNULL(a.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
-    ISNULL(a.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
-    ISNULL(a.TicketsDentroSla, 0) AS TicketsDentroSla,
-    CAST(ROUND(100.0 * a.TicketsDentroSla / NULLIF(a.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
-    d.DataUltimoTicket,
-    DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
+    ISNULL(r.Servico, N'Sem Serviço') AS Servico,
+    ISNULL(r.EquipeAtual, N'Sem Equipe') AS Equipe,
+    ISNULL(r.TotalTicketsHistorico, 0) AS TotalTicketsHistorico,
+    ISNULL(r.TicketsAtualmenteAbertos, 0) AS TicketsAtualmenteAbertos,
+    ISNULL(r.TicketsDentroSla, 0) AS TicketsDentroSla,
+    CAST(ROUND(100.0 * r.TicketsDentroSla / NULLIF(r.TotalSlaValido, 0), 1) AS DECIMAL(5,1)) AS SlaCumpridoPct,
+    r.DataUltimoTicket,
+    DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) AS DiasDesdeUltimoTicket,
     CASE
-        WHEN d.DataUltimoTicket IS NULL OR DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
-        WHEN DATEDIFF(DAY, d.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
+        WHEN r.DataUltimoTicket IS NULL OR DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) >= p.DiasSilenciosoCritico THEN 'Risco Churn (Silencioso > 60d)'
+        WHEN DATEDIFF(DAY, r.DataUltimoTicket, SYSDATETIME()) >= (p.DiasSilenciosoCritico / 2) THEN 'Atenção (Silencioso 30-60d)'
         ELSE 'Ativo (< 30d)'
     END AS StatusRelacionamento
 FROM core.Dim_Cliente c
-LEFT JOIN DonoAtual d ON c.ClienteId = d.EmpresaId
-LEFT JOIN Agregacao a ON c.ClienteId = a.EmpresaId AND d.Servico = a.Servico
+LEFT JOIN ResumoTickets r ON c.ClienteId = r.EmpresaId
 CROSS JOIN Parametros p
 WHERE
-    (ISNULL(c.TipoPessoa, 2) IN (2, 4) OR (c.EmpresaId IS NULL AND EXISTS (SELECT 1 FROM core.Fato_Ticket tk WHERE tk.EmpresaId = c.ClienteId)))
-    AND ISNULL(c.Ativo, 1) = 1;
+    ISNULL(c.Ativo, 1) = 1
+    AND (
+        ISNULL(c.TipoPessoa, 2) IN (2, 4)
+        OR (c.EmpresaId IS NULL AND r.EmpresaId IS NOT NULL)
+    );
 GO
 
 /* ----------------------------------------------------------------------------
@@ -420,7 +420,7 @@ SELECT
         WHEN t.StatusBase IN ('Resolved', 'Closed', 'Canceled') OR ISNULL(st.EhFinal, 0) = 1 THEN N'Encerrado'
         ELSE N'Em Aberto'
     END AS Situacao,
-    ISNULL(t.ServicoN1, N'Não Informado') AS Servico,
+    ISNULL(NULLIF(LTRIM(RTRIM(t.ServicoN1)), N''), N'Não Informado') AS Servico,
     t.Categoria,
     t.Urgencia,
     1 AS QtdTickets

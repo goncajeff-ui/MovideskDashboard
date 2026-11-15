@@ -157,6 +157,8 @@ CREATE TABLE core.Dim_Cliente (
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Dim_Cliente_Tipo')
     CREATE INDEX IX_core_Dim_Cliente_Tipo ON core.Dim_Cliente (TipoPessoa) INCLUDE (Nome, Ativo);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Dim_Cliente_RaioX' AND object_id = OBJECT_ID(N'core.Dim_Cliente'))
+    CREATE INDEX IX_core_Dim_Cliente_RaioX ON core.Dim_Cliente (Ativo, TipoPessoa, EmpresaId) INCLUDE (Nome, RazaoSocial);
 GO
 
 IF OBJECT_ID(N'core.Dim_CampoCustomizado') IS NULL
@@ -233,6 +235,10 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_Data
     CREATE INDEX IX_core_Fato_Ticket_DataResolucao ON core.Fato_Ticket (DataResolucao) INCLUDE (Equipe, AgenteId);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_Empresa')
     CREATE INDEX IX_core_Fato_Ticket_Empresa ON core.Fato_Ticket (EmpresaId, DataCriacao);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_Empresa_RaioX' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+    CREATE INDEX IX_core_Fato_Ticket_Empresa_RaioX ON core.Fato_Ticket (EmpresaId, ServicoN1, DataCriacao DESC) INCLUDE (Equipe, Status, StatusBase, DataResolucao, SlaDataSolucao);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_DataCriacao_Clientes' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+    CREATE INDEX IX_core_Fato_Ticket_DataCriacao_Clientes ON core.Fato_Ticket (DataCriacao) INCLUDE (EmpresaId, Equipe, ServicoN1, Status, StatusBase, AgenteId, Categoria, Urgencia, Protocolo);
 GO
 
 IF OBJECT_ID(N'core.Fato_TicketCliente') IS NULL

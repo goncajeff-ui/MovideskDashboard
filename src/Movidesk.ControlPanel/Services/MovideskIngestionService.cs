@@ -158,6 +158,54 @@ public sealed class MovideskIngestionService : IDisposable
                 AppendLog($"[INF] Corrigidos {statusCorrigidos} status encerrados em core.Dim_Status (EhFinal = 1, PausaSla = 1).");
             }
 
+            // 1c. Garante índices covering de alta performance para Raio-X e Clientes por Período
+            const string sqlCountIdx = @"
+                SELECT COUNT(*)
+                FROM sys.indexes
+                WHERE name IN (
+                    N'IX_core_Dim_Cliente_RaioX',
+                    N'IX_core_Fato_Ticket_Empresa_RaioX',
+                    N'IX_core_Fato_Ticket_DataCriacao_Clientes'
+                );";
+
+            int idxExistentes = 0;
+            await using (var cmdCountIdx = new SqlCommand(sqlCountIdx, conn) { CommandTimeout = 30 })
+            {
+                var resIdx = await cmdCountIdx.ExecuteScalarAsync(ct);
+                if (resIdx is not null && resIdx != DBNull.Value)
+                {
+                    idxExistentes = Convert.ToInt32(resIdx);
+                }
+            }
+
+            bool criouIndices = false;
+            if (idxExistentes < 3)
+            {
+                AppendLog("[INF] Criando índices covering de alta performance para Raio-X e Clientes por Período...");
+                const string sqlCreateIndexes = @"
+                    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Dim_Cliente_RaioX' AND object_id = OBJECT_ID(N'core.Dim_Cliente'))
+                        CREATE INDEX IX_core_Dim_Cliente_RaioX
+                            ON core.Dim_Cliente (Ativo, TipoPessoa, EmpresaId)
+                            INCLUDE (Nome, RazaoSocial);
+
+                    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_Empresa_RaioX' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+                        CREATE INDEX IX_core_Fato_Ticket_Empresa_RaioX
+                            ON core.Fato_Ticket (EmpresaId, ServicoN1, DataCriacao DESC)
+                            INCLUDE (Equipe, Status, StatusBase, DataResolucao, SlaDataSolucao);
+
+                    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_core_Fato_Ticket_DataCriacao_Clientes' AND object_id = OBJECT_ID(N'core.Fato_Ticket'))
+                        CREATE INDEX IX_core_Fato_Ticket_DataCriacao_Clientes
+                            ON core.Fato_Ticket (DataCriacao)
+                            INCLUDE (EmpresaId, Equipe, ServicoN1, Status, StatusBase, AgenteId, Categoria, Urgencia, Protocolo);";
+
+                await using (var cmdCreateIdx = new SqlCommand(sqlCreateIndexes, conn) { CommandTimeout = 180 })
+                {
+                    await cmdCreateIdx.ExecuteNonQueryAsync(ct);
+                }
+                criouIndices = true;
+                AppendLog("[OK] Índices covering do Raio-X e Clientes por Período aplicados no MovideskDM.");
+            }
+
             // 2. Verifica Procedures no schema core antes de aplicar 04_procedure_processamento.sql
             const string sqlCheckProcs = @"
                 SELECT
@@ -194,7 +242,7 @@ public sealed class MovideskIngestionService : IDisposable
                 await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.04_procedure_processamento.sql", ct);
             }
 
-            // 3. Verifica todas as 9 Views no schema mart + colunas obrigatórias + correção Backlog/SLA
+            // 3. Verifica todas as 9 Views no schema mart + colunas obrigatórias + correção Backlog/SLA + otimização Raio-X
             const string sqlCheckViews = @"
                 SELECT
                     v.name AS ViewName,
@@ -251,18 +299,23 @@ public sealed class MovideskIngestionService : IDisposable
                 ["vw_ClienteRaioX"] = ["Equipe", "Servico"],
                 ["vw_MapaDemanda"] = ["Equipe", "Servico"],
                 ["vw_BacklogEvolucao"] = ["Equipe"],
-                ["vw_TicketsPorClientePeriodo"] = ["Equipe", "Cliente", "DataAbertura"]
+                ["vw_TicketsPorClientePeriodo"] = ["Equipe", "Servico", "Cliente", "DataAbertura"]
             };
 
-            bool precisaAtualizarViews =
+            bool precisaAtualizarRegrasBacklog =
                 !viewDefs.TryGetValue("vw_VisaoGeralKpis", out var defKpis) ||
                 defKpis.Contains("ISNULL(st.EhFinal, CASE", StringComparison.OrdinalIgnoreCase) ||
                 !defKpis.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
                 !viewDefs.TryGetValue("vw_SlaRadar", out var defRadar) ||
                 defRadar.Contains("ISNULL(st.EhFinal, CASE", StringComparison.OrdinalIgnoreCase) ||
-                !defRadar.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase) ||
+                !defRadar.Contains("st.PausaSla", StringComparison.OrdinalIgnoreCase);
+
+            bool precisaAtualizarViews =
+                precisaAtualizarRegrasBacklog ||
                 !viewDefs.TryGetValue("vw_ClienteRaioX", out var defClienteRaioX) ||
-                !defClienteRaioX.Contains("DonoAtual", StringComparison.OrdinalIgnoreCase);
+                !defClienteRaioX.Contains("ResumoTickets", StringComparison.OrdinalIgnoreCase) ||
+                !viewDefs.TryGetValue("vw_TicketsPorClientePeriodo", out var defClientesPeriodo) ||
+                !defClientesPeriodo.Contains("NULLIF(LTRIM(RTRIM(t.ServicoN1))", StringComparison.OrdinalIgnoreCase);
 
             if (!precisaAtualizarViews)
             {
@@ -289,7 +342,7 @@ public sealed class MovideskIngestionService : IDisposable
 
             if (precisaAtualizarViews)
             {
-                AppendLog("[INF] Atualizando as 9 views do schema mart (correção Backlog/SLA, filtro 'Equipe' e vw_TicketsPorClientePeriodo)...");
+                AppendLog("[INF] Atualizando as 9 views do schema mart (otimização single-pass Raio-X, Serviço e Backlog/SLA)...");
                 await ExecutarScriptSqlEmbutidoAsync(conn, "Movidesk.ControlPanel.Sql.03_views_kpis.sql", ct);
             }
 
@@ -327,9 +380,9 @@ public sealed class MovideskIngestionService : IDisposable
                     await cmdSnap.ExecuteNonQueryAsync(ct);
                 }
 
-                AppendLog("[OK] Procedures, 9 Views (todas com filtro Equipe), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
+                AppendLog("[OK] Procedures, 9 Views (otimizadas), Fuso BRT e Snapshot de 90 dias aplicados com sucesso!");
             }
-            else if (totalRaw > 0 && (statusCorrigidos > 0 || precisaAtualizarProcs || precisaAtualizarViews))
+            else if (totalRaw > 0 && (statusCorrigidos > 0 || precisaAtualizarProcs || precisaAtualizarRegrasBacklog))
             {
                 AppendLog("[INF] Reconstruindo Snapshot Diário do Backlog com as regras corrigidas de Resolvido e SLA Pausado...");
                 await using (var cmdSnap = new SqlCommand("EXEC core.usp_AtualizarSnapshotBacklog @DiasRetroativos = 90, @ReconstruirHistorico = 1;", conn) { CommandTimeout = 300 })
@@ -338,13 +391,13 @@ public sealed class MovideskIngestionService : IDisposable
                 }
                 AppendLog("[OK] Status, Procedures, Snapshot 90d e as 9 Views mart.* sincronizados com sucesso no MovideskDM!");
             }
-            else if (precisaAtualizarViews || precisaAtualizarProcs || statusCorrigidos > 0)
+            else if (criouIndices || precisaAtualizarViews || precisaAtualizarProcs || statusCorrigidos > 0)
             {
-                AppendLog("[OK] Procedures e as 9 Views mart.* (com filtro Equipe em todas) sincronizadas no MovideskDM.");
+                AppendLog("[OK] Índices covering e 9 Views mart.* (otimização Raio-X e filtro Equipe/Serviço) sincronizados no MovideskDM.");
             }
             else
             {
-                AppendLog("[OK] 9 Views mart.* validadas com filtro 'Equipe' e regras de Backlog/SLA íntegras.");
+                AppendLog("[OK] 9 Views mart.* e índices de performance validados e íntegros no MovideskDM.");
             }
 
             _objetosBancoVerificados = true;
