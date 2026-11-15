@@ -32,4 +32,8 @@
     <EmbeddedResource Include="..\..\database\*.sql" LogicalName="Movidesk.Installer.Sql.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+  </ItemGroup>
+
 </Project>

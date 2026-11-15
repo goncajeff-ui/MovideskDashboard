@@ -249,7 +249,7 @@ public sealed class FrmInstalador : Form
         heroHeader.Controls.Add(lblSubTop);
         leftPanel.Controls.Add(heroHeader, 0, 0);
 
-        // Card de Steps (7 passos)
+        // Card de Steps
         var cardSteps = CriarCardPainel(CorPainelEscuro, CorBordaSutil);
         cardSteps.Padding = new Padding(10, 10, 10, 8);
 
@@ -266,7 +266,7 @@ public sealed class FrmInstalador : Form
 
         var lblStepsHeader = new Label
         {
-            Text = "ROTEIRO DO ASSISTENTE (7 PASSOS)",
+            Text = $"ROTEIRO DO ASSISTENTE ({InstaladorManager.Etapas.Count} PASSOS)",
             ForeColor = CorCianoBrilho,
             Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
             Dock = DockStyle.Fill,
@@ -315,7 +315,7 @@ public sealed class FrmInstalador : Form
 
         _lblPassoBadge = new Label
         {
-            Text = "PASSO 1 DE 7 • GUIA DIDÁTICO",
+            Text = $"PASSO 1 DE {InstaladorManager.Etapas.Count} • GUIA DIDÁTICO",
             ForeColor = CorDouradoAdvice,
             Font = new Font("Segoe UI", 8f, FontStyle.Bold),
             Dock = DockStyle.Fill,

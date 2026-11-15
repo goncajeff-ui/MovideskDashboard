@@ -4,8 +4,8 @@ using System.Security.Cryptography;
 namespace Movidesk.Installer.Core;
 
 /// <summary>
-/// Orquestrador central das 7 etapas de implantação unificada
-/// (Painel de Controle + WSL 2 Ubuntu + Docker + Apache Superset + Driver ODBC 18 + Dashboard Movidesk BI).
+/// Orquestrador central das 4 etapas de implantação unificada
+/// (1. Aplicação & Banco de Dados | 2. Infraestrutura Linux & Docker | 3. Plataforma Apache Superset | 4. Deploy Dashboard).
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class InstaladorManager
@@ -13,59 +13,47 @@ public sealed class InstaladorManager
     private readonly ExtratorArquivos _extrator;
     private readonly AtalhoManager _atalhoManager;
     private readonly WslEngine _wslEngine;
+    private readonly SqlDatabaseDeployer _sqlDeployer;
 
     public static IReadOnlyList<EtapaDefinicao> Etapas { get; } =
     [
         new(
             1,
-            "STEP_1_PAINEL",
-            "Extração do Painel de Controle",
-            "Instalando a interface de gerenciamento do BI, configurando a chave da API Movidesk e criando atalhos na Área de Trabalho."),
+            "STEP_1_APP_BANCO",
+            "Aplicação & Banco de Dados (MovideskDM)",
+            "Instalando o Painel de Controle (.NET 8), criando atalhos e provisionando o banco MovideskDM com tabelas, índices e views nativamente no SQL Server."),
         new(
             2,
-            "STEP_2_WSL",
-            "Ambiente Linux (WSL 2 Ubuntu)",
-            "Este passo prepara o subsistema Linux (WSL 2 Ubuntu) no seu Windows, necessário para rodar o motor de dados."),
+            "STEP_2_INFRA_WSL_DOCKER",
+            "Infraestrutura Linux & Docker (WSL 2)",
+            "Preparando o subsistema Linux (WSL 2 Ubuntu) e inicializando o motor de contêineres Docker para isolamento dos serviços."),
         new(
             3,
-            "STEP_3_DOCKER",
-            "Motor Docker & Docker Compose",
-            "Instalando o orquestrador de contêineres Docker para executar o painel de BI de forma isolada e estável."),
+            "STEP_3_SUPERSET",
+            "Plataforma Apache Superset & Conectores",
+            "Inicializando o contêiner Apache Superset 6.1.0 na porta 8088, metadados internos e drivers ODBC 18 para SQL Server."),
         new(
             4,
-            "STEP_4_SUPERSET",
-            "Download & Inicialização do Superset",
-            "Baixando a imagem oficial Apache Superset 6.1.0, gerando chave criptográfica segura e inicializando o contêiner na porta 8088."),
-        new(
-            5,
-            "STEP_5_CONFIG",
-            "Configuração Interna do Superset",
-            "Configurando usuários administradores e inicializando o banco de dados interno da plataforma."),
-        new(
-            6,
-            "STEP_6_ODBC",
-            "Driver ODBC 18 (SQL Server)",
-            "Instalando drivers de comunicação com o SQL Server (msodbcsql18) e conectores para leitura do MovideskDM."),
-        new(
-            7,
-            "STEP_7_DEPLOY",
-            "Deploy Final dos Dashboards Oficiais",
-            "Carregando as visões, os 9 Datasets da camada mart e os 15 gráficos oficiais do Dashboard - Movidesk BI.")
+            "STEP_4_DASHBOARD",
+            "Deploy do Dashboard Movidesk BI",
+            "Conectando a base MovideskDM ao Superset, registrando os 9 Datasets oficiais e publicando os 15 gráficos do Dashboard.")
     ];
 
     public InstaladorManager()
-        : this(new ExtratorArquivos(), new AtalhoManager(), new WslEngine())
+        : this(new ExtratorArquivos(), new AtalhoManager(), new WslEngine(), new SqlDatabaseDeployer())
     {
     }
 
     public InstaladorManager(
         ExtratorArquivos extrator,
         AtalhoManager atalhoManager,
-        WslEngine wslEngine)
+        WslEngine wslEngine,
+        SqlDatabaseDeployer sqlDeployer)
     {
         _extrator = extrator;
         _atalhoManager = atalhoManager;
         _wslEngine = wslEngine;
+        _sqlDeployer = sqlDeployer;
     }
 
     public async Task<ResultadoInstalacao> ExecutarInstalacaoCompletaAsync(
@@ -83,37 +71,36 @@ public sealed class InstaladorManager
 
         try
         {
-            // STEP 1 — Extração do Painel, API Key no appsettings.json e Atalho Desktop
-            (exePainel, atalhoDesktop) = await ExecutarEtapaAsync(1, progresso, log, () =>
-                ExecutarStep1ExtracaoPainelAsync(config, log), ct);
+            // ETAPA 1/4 — Aplicação & Banco de Dados (MovideskDM)
+            (exePainel, atalhoDesktop) = await ExecutarEtapaAsync(1, progresso, log, async () =>
+            {
+                var r = await ExecutarStep1ExtracaoPainelAsync(config, log);
+                await _sqlDeployer.GarantirBancoEExecutarScriptsAsync(config, log, ct);
+                return r;
+            }, ct);
 
-            // STEP 2 — Preparação do WSL 2 e Distro Ubuntu
-            await ExecutarEtapaAsync(2, progresso, log, () =>
-                _wslEngine.GarantirWsl2UbuntuAsync(config.WslDistro, log, ct), ct);
+            // ETAPA 2/4 — Infraestrutura Linux & Docker (WSL 2)
+            await ExecutarEtapaAsync(2, progresso, log, async () =>
+            {
+                await _wslEngine.GarantirWsl2UbuntuAsync(config.WslDistro, log, ct);
+                await _wslEngine.InstalarEIniciarDockerAsync(config.WslDistro, log, ct);
+            }, ct);
 
-            // STEP 3 — Instalação e subida do Docker Engine + Compose no Ubuntu
-            await ExecutarEtapaAsync(3, progresso, log, () =>
-                _wslEngine.InstalarEIniciarDockerAsync(config.WslDistro, log, ct), ct);
+            // ETAPA 3/4 — Plataforma Apache Superset & Conectores
+            await ExecutarEtapaAsync(3, progresso, log, async () =>
+            {
+                await ExecutarStepDownloadSupersetAsync(config, log, ct);
+                await ExecutarStepConfiguracaoInternaAsync(config, log, ct);
+                await ExecutarStepDriverOdbcAsync(config, log, ct);
+            }, ct);
 
-            // STEP 4 — Exportação do docker-compose.yml / superset_config.py e docker compose up -d
-            await ExecutarEtapaAsync(4, progresso, log, () =>
-                ExecutarStep4DownloadSupersetAsync(config, log, ct), ct);
-
-            // STEP 5 — Configuração Interna via docker exec (db upgrade, admin, init)
-            await ExecutarEtapaAsync(5, progresso, log, () =>
-                ExecutarStep5ConfiguracaoInternaAsync(config, log, ct), ct);
-
-            // STEP 6 — Instalação do Driver ODBC msodbcsql18 + pyodbc/pymssql no contêiner
-            await ExecutarEtapaAsync(6, progresso, log, () =>
-                ExecutarStep6DriverOdbcAsync(config, log, ct), ct);
-
-            // STEP 7 — Deploy Final das Visões e Gráficos Oficiais do Dashboard - Movidesk BI
-            deployPendenteBanco = await ExecutarStep7ComToleranciaBancoAsync(config, log, progresso, ct);
+            // ETAPA 4/4 — Deploy Final do Dashboard Movidesk BI
+            deployPendenteBanco = await ExecutarStepDeployDashboardAsync(config, log, progresso, ct);
 
             log.CopiarLogParaPastaInstalacao(config.DiretorioInstalacao);
 
             string resumo = deployPendenteBanco
-                ? "Infraestrutura (Painel, WSL 2, Docker, Superset e Driver ODBC 18) implantada com sucesso! Apenas o provisionamento automático do Dashboard aguarda a criação/acesso ao banco MovideskDM no SQL Server."
+                ? "Infraestrutura (Painel, WSL 2, Docker, Superset e Driver ODBC 18) implantada com sucesso! O provisionamento dos dashboards no Superset aguarda a conexão com o banco MovideskDM no SQL Server."
                 : "Implantação completa finalizada com sucesso! O Painel de Controle e o Dashboard - Movidesk BI estão prontos para uso.";
 
             return new ResultadoInstalacao
@@ -203,7 +190,7 @@ public sealed class InstaladorManager
         return Task.FromResult((caminhoExe, atalho));
     }
 
-    private async Task ExecutarStep4DownloadSupersetAsync(
+    private async Task ExecutarStepDownloadSupersetAsync(
         ConfiguracaoInstalacao config,
         AuditorLog log,
         CancellationToken ct)
@@ -413,7 +400,7 @@ public sealed class InstaladorManager
         log.Sucesso("Contêiner Apache Superset 6.1.0 baixado e inicializado na porta 8088.");
     }
 
-    private async Task ExecutarStep5ConfiguracaoInternaAsync(
+    private async Task ExecutarStepConfiguracaoInternaAsync(
         ConfiguracaoInstalacao config,
         AuditorLog log,
         CancellationToken ct)
@@ -490,7 +477,7 @@ public sealed class InstaladorManager
         }
     }
 
-    private async Task ExecutarStep6DriverOdbcAsync(
+    private async Task ExecutarStepDriverOdbcAsync(
         ConfiguracaoInstalacao config,
         AuditorLog log,
         CancellationToken ct)
@@ -620,16 +607,16 @@ public sealed class InstaladorManager
         }
     }
 
-    private async Task<bool> ExecutarStep7ComToleranciaBancoAsync(
+    private async Task<bool> ExecutarStepDeployDashboardAsync(
         ConfiguracaoInstalacao config,
         AuditorLog log,
         IProgress<ProgressoEtapa>? progresso,
         CancellationToken ct)
     {
-        EtapaDefinicao etapa = Etapas[6];
+        EtapaDefinicao etapa = Etapas[3];
         log.Secao($"Etapa {etapa.Numero}/{Etapas.Count} — {etapa.Titulo}");
         log.Info(etapa.DescricaoUx);
-        ReportarEtapa(progresso, 7, StatusEtapa.EmAndamento);
+        ReportarEtapa(progresso, 4, StatusEtapa.EmAndamento);
 
         try
         {
@@ -742,7 +729,7 @@ public sealed class InstaladorManager
                     "SQL Server porta 1433 ou banco 'MovideskDM' ainda não acessível a partir do WSL2 neste momento. " +
                     $"Os scripts SQL foram salvos em '{Path.Combine(config.DiretorioInstalacao, "database")}'. " +
                     "Após criar o banco MovideskDM e liberar TCP/IP no SQL Server, abra o 'Painel Movidesk BI' e clique em 'Executar Setup Automático'.");
-                ReportarEtapa(progresso, 7, StatusEtapa.Aviso);
+                ReportarEtapa(progresso, 4, StatusEtapa.Aviso);
                 return true;
             }
 
@@ -753,18 +740,18 @@ public sealed class InstaladorManager
             }
 
             log.Sucesso("Dashboard - Movidesk BI (9 Datasets, 15 Gráficos e 3 Filtros Nativos) publicado com sucesso!");
-            ReportarEtapa(progresso, 7, StatusEtapa.Concluida);
+            ReportarEtapa(progresso, 4, StatusEtapa.Concluida);
             return false;
         }
         catch (OperationCanceledException)
         {
-            ReportarEtapa(progresso, 7, StatusEtapa.Aviso);
+            ReportarEtapa(progresso, 4, StatusEtapa.Aviso);
             throw;
         }
         catch (Exception ex)
         {
-            ReportarEtapa(progresso, 7, StatusEtapa.Erro);
-            throw new InvalidOperationException($"Falha na Etapa 7 (Deploy Final do Dashboard): {ex.Message}", ex);
+            ReportarEtapa(progresso, 4, StatusEtapa.Erro);
+            throw new InvalidOperationException($"Falha na Etapa 4 (Deploy Final do Dashboard): {ex.Message}", ex);
         }
     }
 
