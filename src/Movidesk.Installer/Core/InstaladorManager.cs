@@ -485,50 +485,85 @@ public sealed class InstaladorManager
             CONTAINER='{{containerName}}'
 
             echo "[INF] Instalando Microsoft ODBC Driver 18 (msodbcsql18) no contêiner $CONTAINER..."
-            docker exec -u 0 "$CONTAINER" bash -c '
-                set -e
+            docker exec -i -u 0 "$CONTAINER" bash -e -o pipefail <<'EOF_ODBC'
                 export DEBIAN_FRONTEND=noninteractive
                 export PATH="/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                export UV_CACHE_DIR="/tmp/uv-cache"
+                export PIP_NO_CACHE_DIR=1
+                umask 022
+
+                rm -f /etc/apt/sources.list.d/mssql-release.list \
+                      /etc/apt/sources.list.d/mssql-release.sources \
+                      /etc/apt/sources.list.d/microsoft-prod.list || true
+
                 apt-get -o Acquire::Retries=3 update -qq
-                apt-get -o Acquire::Retries=3 install -y -qq curl gnupg2 apt-transport-https ca-certificates unixodbc unixodbc-dev freetds-dev gcc
+                apt-get -o Acquire::Retries=3 install -y -qq \
+                    curl gnupg2 apt-transport-https ca-certificates \
+                    unixodbc unixodbc-dev freetds-dev gcc g++
 
                 . /etc/os-release
                 DIST_ID=$(echo "${ID:-debian}" | tr "[:upper:]" "[:lower:]")
                 VER_ID="${VERSION_ID:-12}"
+                CODENAME="${VERSION_CODENAME:-bookworm}"
+                ARCH=$(dpkg --print-architecture)
 
                 install -m 0755 -d /usr/share/keyrings
-                curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor --yes -o /usr/share/keyrings/microsoft-prod.gpg
+                curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --batch --dearmor --yes -o /usr/share/keyrings/microsoft-prod.gpg
                 chmod a+r /usr/share/keyrings/microsoft-prod.gpg
 
                 REPO_URL="https://packages.microsoft.com/config/${DIST_ID}/${VER_ID}/prod.list"
                 if ! curl -fsSL "$REPO_URL" -o /etc/apt/sources.list.d/mssql-release.list; then
-                    echo "[AVISO] Fallback de repositório para Debian 12 (bookworm)..."
-                    curl -fsSL "https://packages.microsoft.com/config/debian/12/prod.list" -o /etc/apt/sources.list.d/mssql-release.list
+                    echo "[AVISO] Repositório '${DIST_ID}/${VER_ID}' indisponível; usando Debian 12 (bookworm)..."
+                    curl -fsSL "https://packages.microsoft.com/config/debian/12/prod.list" -o /etc/apt/sources.list.d/mssql-release.list || true
                 fi
 
-                sed -i "s|signed-by=[^ ]*|signed-by=/usr/share/keyrings/microsoft-prod.gpg|g" /etc/apt/sources.list.d/mssql-release.list || true
-                if ! grep -q "signed-by=" /etc/apt/sources.list.d/mssql-release.list; then
-                    sed -i "s|^deb |deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] |" /etc/apt/sources.list.d/mssql-release.list
+                if [ -s /etc/apt/sources.list.d/mssql-release.list ]; then
+                    if grep -q "signed-by=" /etc/apt/sources.list.d/mssql-release.list; then
+                        sed -i 's|signed-by=[^] \t]*|signed-by=/usr/share/keyrings/microsoft-prod.gpg|g' /etc/apt/sources.list.d/mssql-release.list
+                    elif grep -q '^deb \[' /etc/apt/sources.list.d/mssql-release.list; then
+                        sed -i 's|^deb \[|deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg |' /etc/apt/sources.list.d/mssql-release.list
+                    else
+                        sed -i 's|^deb |deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] |' /etc/apt/sources.list.d/mssql-release.list
+                    fi
                 fi
 
-                apt-get -o Acquire::Retries=3 update -qq
+                if [ ! -s /etc/apt/sources.list.d/mssql-release.list ] || ! grep -q "packages.microsoft.com" /etc/apt/sources.list.d/mssql-release.list; then
+                    if [ "$DIST_ID" = "debian" ] && [ -n "$CODENAME" ]; then
+                        echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/${VER_ID}/prod ${CODENAME} main" > /etc/apt/sources.list.d/mssql-release.list
+                    else
+                        echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list
+                    fi
+                fi
+
+                if ! apt-get -o Acquire::Retries=3 update -qq; then
+                    echo "[AVISO] Entrada prod.list rejeitada pelo apt; gravando entrada canônica Debian/Ubuntu..."
+                    if [ "$DIST_ID" = "debian" ] && [ -n "$CODENAME" ]; then
+                        echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/${VER_ID}/prod ${CODENAME} main" > /etc/apt/sources.list.d/mssql-release.list
+                    else
+                        echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list
+                    fi
+                    apt-get -o Acquire::Retries=3 update -qq
+                fi
+
                 ACCEPT_EULA=Y apt-get -o Acquire::Retries=3 install -y -qq msodbcsql18
 
                 echo "[INF] Instalando conectores Python SQL Server (pyodbc + pymssql + pillow)..."
                 if [ -x /app/.venv/bin/python ] && command -v uv >/dev/null 2>&1; then
                     uv pip install --python /app/.venv/bin/python pyodbc pymssql pillow
-                    /app/.venv/bin/python -c "import pyodbc; print(\"[OK] Drivers ODBC carregados:\", pyodbc.drivers())" || true
+                    /app/.venv/bin/python -c "import pyodbc, pymssql; print('[OK] Drivers ODBC carregados:', pyodbc.drivers())"
                 elif [ -x /app/.venv/bin/pip ]; then
                     /app/.venv/bin/pip install --no-cache-dir pyodbc pymssql pillow
-                    /app/.venv/bin/python -c "import pyodbc; print(\"[OK] Drivers ODBC carregados:\", pyodbc.drivers())" || true
+                    /app/.venv/bin/python -c "import pyodbc, pymssql; print('[OK] Drivers ODBC carregados:', pyodbc.drivers())"
                 elif command -v pip3 >/dev/null 2>&1; then
                     pip3 install --no-cache-dir pyodbc pymssql pillow
-                    python3 -c "import pyodbc; print(\"[OK] Drivers ODBC carregados:\", pyodbc.drivers())" || true
+                    python3 -c "import pyodbc, pymssql; print('[OK] Drivers ODBC carregados:', pyodbc.drivers())"
                 else
                     python3 -m pip install --no-cache-dir pyodbc pymssql pillow
-                    python3 -c "import pyodbc; print(\"[OK] Drivers ODBC carregados:\", pyodbc.drivers())" || true
+                    python3 -c "import pyodbc, pymssql; print('[OK] Drivers ODBC carregados:', pyodbc.drivers())"
                 fi
-            '
+
+                rm -rf /tmp/uv-cache /var/lib/apt/lists/* || true
+            EOF_ODBC
 
             echo "[INF] Reiniciando contêiner do Superset para efetivar drivers..."
             cd '{{pastaSuperset}}'
