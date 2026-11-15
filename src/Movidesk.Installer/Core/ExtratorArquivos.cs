@@ -183,6 +183,8 @@ public sealed class ExtratorArquivos
         // Seção Superset
         var supersetObj = rootObj["Superset"] as JsonObject ?? new JsonObject();
         supersetObj["WslDistro"] = config.WslDistro;
+        supersetObj["ContainerName"] = config.NomeConteinerSuperset;
+        supersetObj["ComposePath"] = config.WslPastaSuperset;
         supersetObj["Port"] = 8088;
         supersetObj["Url"] = "http://localhost:8088";
         supersetObj["SecretKey"] ??= "movidesk_superset_super_secret_key_2026";

@@ -24,6 +24,8 @@ public enum SupersetStatus
 public sealed class SupersetService : IDisposable
 {
     private readonly string _wslDistro;
+    private readonly string _containerName;
+    private readonly string _composePath;
     private readonly string _venvActivatePath;
     private readonly string _secretKey;
     private readonly int _port;
@@ -57,6 +59,8 @@ public sealed class SupersetService : IDisposable
     public string DashboardUrl => $"{_supersetUrl.TrimEnd('/')}/superset/dashboard/dashboard-movidesk/";
     public int Port => _port;
     public string WslDistro => _wslDistro;
+    public string ContainerName => _containerName;
+    public string ComposePath => _composePath;
     public string VenvActivatePath => _venvActivatePath;
 
     public bool IsSetupRunning { get; private set; }
@@ -69,6 +73,8 @@ public sealed class SupersetService : IDisposable
     public SupersetService(IConfiguration configuration)
     {
         _wslDistro = configuration["Superset:WslDistro"] ?? "Ubuntu";
+        _containerName = configuration["Superset:ContainerName"] ?? "advice_movidesk_superset";
+        _composePath = configuration["Superset:ComposePath"] ?? "/opt/advice-movidesk-superset";
         _venvActivatePath = configuration["Superset:VenvActivatePath"] ?? "~/superset-env/bin/activate";
         _secretKey = configuration["Superset:SecretKey"] ?? "movidesk_superset_super_secret_key_2026";
         _port = int.TryParse(configuration["Superset:Port"], out var parsedPort) ? parsedPort : 8088;
@@ -202,10 +208,50 @@ public sealed class SupersetService : IDisposable
         }
         NotifyStateChanged();
 
-        string comandoSuperset =
-            $"source {_venvActivatePath} && export SUPERSET_SECRET_KEY='{_secretKey}' && exec superset run -h 0.0.0.0 -p {_port} --with-threads";
+        string comandoSuperset = $$"""
+            set -e
+            echo "[INF] Verificando serviço Docker no WSL..."
+            if ! docker info >/dev/null 2>&1; then
+                echo "[INF] Inicializando daemon do Docker..."
+                service docker status >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+                sleep 2
+            fi
 
-        AppendLog($"Executando WSL ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)}): {comandoSuperset}");
+            COMPOSE_DIR=""
+            if [ -d "{{_composePath}}" ] && [ -f "{{_composePath}}/docker-compose.yml" ]; then
+                COMPOSE_DIR="{{_composePath}}"
+            elif [ -d "/opt/advice-movidesk-superset" ] && [ -f "/opt/advice-movidesk-superset/docker-compose.yml" ]; then
+                COMPOSE_DIR="/opt/advice-movidesk-superset"
+            elif [ -d "/opt/movidesk-superset" ] && [ -f "/opt/movidesk-superset/docker-compose.yml" ]; then
+                COMPOSE_DIR="/opt/movidesk-superset"
+            fi
+
+            if [ -n "$COMPOSE_DIR" ]; then
+                echo "[INF] Iniciando Apache Superset via Docker Compose ($COMPOSE_DIR)..."
+                cd "$COMPOSE_DIR"
+                if docker compose version >/dev/null 2>&1; then
+                    docker compose up -d
+                elif command -v docker-compose >/dev/null 2>&1; then
+                    docker-compose up -d
+                else
+                    docker start {{_containerName}} 2>/dev/null || docker start advice_movidesk_superset 2>/dev/null || true
+                fi
+            elif docker ps -a --format '{{"{{"}}.Names{{"}}"}}' | grep -Eq '^({{_containerName}}|advice_movidesk_superset|superset-movidesk)$'; then
+                echo "[INF] Inicializando contêiner Docker existente..."
+                docker start {{_containerName}} 2>/dev/null || docker start advice_movidesk_superset 2>/dev/null || docker start superset-movidesk 2>/dev/null
+            elif [ -f "{{_venvActivatePath}}" ]; then
+                echo "[INF] Utilizando ambiente virtual Python legado ({{_venvActivatePath}})..."
+                source "{{_venvActivatePath}}" && export SUPERSET_SECRET_KEY='{{_secretKey}}' && exec superset run -h 0.0.0.0 -p {{_port}} --with-threads
+            else
+                echo "[ERRO] Nenhum contêiner Docker ('{{_containerName}}') ou diretório Docker Compose foi encontrado no WSL." >&2
+                echo "[DICA] Execute o instalador 'MovideskInstaller-Dashboard-Movidesk-BI.exe' para provisionar a imagem oficial apache/superset:6.1.0." >&2
+                exit 1
+            fi
+
+            echo "[OK] Inicialização do Docker concluída. Aguardando servidor web responder em http://localhost:{{_port}}/health..."
+            """;
+
+        AppendLog($"Executando WSL ({(string.IsNullOrWhiteSpace(_wslDistro) ? "distro padrão" : _wslDistro)} - Docker Engine)...");
 
         try
         {
@@ -225,6 +271,8 @@ public sealed class SupersetService : IDisposable
                     startInfo.ArgumentList.Add("-d");
                     startInfo.ArgumentList.Add(_wslDistro);
                 }
+                startInfo.ArgumentList.Add("-u");
+                startInfo.ArgumentList.Add("root");
                 startInfo.ArgumentList.Add("-e");
                 startInfo.ArgumentList.Add("bash");
                 startInfo.ArgumentList.Add("-c");
@@ -263,20 +311,23 @@ public sealed class SupersetService : IDisposable
                 int? exitCode = null;
                 try { exitCode = process.ExitCode; } catch { /* Ignora */ }
 
-                lock (_stateLock)
+                if (exitCode.HasValue && exitCode.Value != 0)
                 {
-                    if (Status == SupersetStatus.Starting || Status == SupersetStatus.Online)
+                    lock (_stateLock)
                     {
-                        Status = SupersetStatus.Offline;
-                        StatusMessage = exitCode.HasValue
-                            ? $"Processo Superset encerrado (código {exitCode.Value})."
-                            : "Processo Superset encerrado.";
+                        if (Status == SupersetStatus.Starting)
+                        {
+                            Status = SupersetStatus.Error;
+                            StatusMessage = $"Inicialização do Superset falhou no WSL (código {exitCode.Value}).";
+                        }
                     }
+                    AppendLog($"Processo WSL finalizado com código {exitCode.Value}.");
+                    NotifyStateChanged();
                 }
-                AppendLog(exitCode.HasValue
-                    ? $"Processo WSL finalizado com código {exitCode.Value}."
-                    : "Processo WSL finalizado.");
-                NotifyStateChanged();
+                else
+                {
+                    AppendLog("Processo de inicialização do Docker concluído no WSL.");
+                }
             };
 
             if (!process.Start())
@@ -317,6 +368,19 @@ public sealed class SupersetService : IDisposable
                 StatusMessage = "Superset parado pelo operador.";
             }
 
+            string comandoStop = $$"""
+                if [ -d "{{_composePath}}" ]; then
+                    cd "{{_composePath}}" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
+                elif [ -d "/opt/advice-movidesk-superset" ]; then
+                    cd "/opt/advice-movidesk-superset" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
+                elif [ -d "/opt/movidesk-superset" ]; then
+                    cd "/opt/movidesk-superset" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true)
+                fi
+                docker stop {{_containerName}} 2>/dev/null || docker stop advice_movidesk_superset 2>/dev/null || docker stop superset-movidesk 2>/dev/null || true
+                pkill -f '[s]uperset run' 2>/dev/null || true
+                echo "[OK] Contêiner Apache Superset finalizado."
+                """;
+
             if (OperatingSystem.IsWindows())
             {
                 var stopPsi = new ProcessStartInfo
@@ -330,10 +394,12 @@ public sealed class SupersetService : IDisposable
                     stopPsi.ArgumentList.Add("-d");
                     stopPsi.ArgumentList.Add(_wslDistro);
                 }
+                stopPsi.ArgumentList.Add("-u");
+                stopPsi.ArgumentList.Add("root");
                 stopPsi.ArgumentList.Add("-e");
                 stopPsi.ArgumentList.Add("bash");
                 stopPsi.ArgumentList.Add("-c");
-                stopPsi.ArgumentList.Add("pkill -f '[s]uperset run' || true");
+                stopPsi.ArgumentList.Add(comandoStop);
 
                 using var stopProc = Process.Start(stopPsi);
                 if (stopProc != null)
@@ -1897,12 +1963,12 @@ public sealed class SupersetService : IDisposable
         const int maxTentativas = 40;
         for (int i = 0; i < maxTentativas && !ct.IsCancellationRequested; i++)
         {
-            if (process.HasExited)
+            if (process.HasExited && process.ExitCode != 0)
             {
                 lock (_stateLock)
                 {
                     Status = SupersetStatus.Error;
-                    StatusMessage = $"WSL fechou antes de responder (código {process.ExitCode}). Verifique os logs.";
+                    StatusMessage = $"WSL fechou com erro (código {process.ExitCode}). Verifique os logs.";
                 }
                 NotifyStateChanged();
                 return;

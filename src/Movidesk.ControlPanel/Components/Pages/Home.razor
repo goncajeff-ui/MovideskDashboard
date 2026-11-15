@@ -64,7 +64,7 @@
             <div class="card-body">
                 <div class="meta-row">
                     <span class="meta-chip"><strong>Distro:</strong> @SupersetService.WslDistro</span>
-                    <span class="meta-chip"><strong>Venv WSL:</strong> <code>@SupersetService.VenvActivatePath</code></span>
+                    <span class="meta-chip"><strong>Motor:</strong> Docker (@SupersetService.ContainerName)</span>
                     <span class="meta-chip"><strong>Porta:</strong> @SupersetService.Port</span>
                 </div>
 
@@ -88,7 +88,7 @@
                         }
                         else
                         {
-                            <span>Iniciar Superset (WSL2)</span>
+                            <span>Iniciar Superset (Docker / WSL2)</span>
                         }
                     </button>
 
@@ -127,7 +127,7 @@
                     <div class="console-log">
                         @if (supersetLogs.Count == 0)
                         {
-                            <div class="log-empty">Clique em "Iniciar Superset (WSL2)" para subir o servidor na porta @SupersetService.Port.</div>
+                            <div class="log-empty">Clique em "Iniciar Superset (Docker / WSL2)" para subir o servidor na porta @SupersetService.Port.</div>
                         }
                         else
                         {
