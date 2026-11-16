@@ -582,7 +582,7 @@ public sealed class FrmInstalador : Form
 
         _txtSqlHost = CriarTextBoxEstilizado("localhost", "localhost");
         _txtSqlBanco = CriarTextBoxEstilizado("MovideskDM", "MovideskDM");
-        _txtSqlUsuario = CriarTextBoxEstilizado("sa", "sa");
+        _txtSqlUsuario = CriarTextBoxEstilizado("sa", "sa (ou vazio = Auth Windows)");
         _txtSqlSenha = CriarTextBoxEstilizado("123456", "Senha SQL", ocultarSenha: true);
         _txtSupersetSenha = CriarTextBoxEstilizado("admin", "admin", ocultarSenha: true);
 
@@ -1079,7 +1079,7 @@ public sealed class FrmInstalador : Form
             DiretorioInstalacao = dir,
             SqlServerHost = string.IsNullOrWhiteSpace(_txtSqlHost.Text) ? "localhost" : _txtSqlHost.Text.Trim(),
             SqlServerBanco = string.IsNullOrWhiteSpace(_txtSqlBanco.Text) ? "MovideskDM" : _txtSqlBanco.Text.Trim(),
-            SqlServerUsuario = string.IsNullOrWhiteSpace(_txtSqlUsuario.Text) ? "sa" : _txtSqlUsuario.Text.Trim(),
+            SqlServerUsuario = _txtSqlUsuario.Text.Trim(),
             SqlServerSenha = _txtSqlSenha.Text,
             SupersetSenhaAdmin = _txtSupersetSenha.Text,
             CriarAtalhoDesktop = _chkAtalhoDesktop.Checked,

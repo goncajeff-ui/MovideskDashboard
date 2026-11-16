@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Movidesk.Installer.Core;
 
@@ -74,11 +75,7 @@ public sealed class InstaladorManager
         {
             // ETAPA 1/4 — Aplicação & Banco de Dados (MovideskDM)
             (exePainel, atalhoDesktop) = await ExecutarEtapaAsync(1, progresso, log, async () =>
-            {
-                var r = await ExecutarStep1ExtracaoPainelAsync(config, log);
-                await _sqlDeployer.GarantirBancoEExecutarScriptsAsync(config, log, ct);
-                return r;
-            }, ct);
+                await ExecutarStep1ExtracaoPainelEBancoAsync(config, log, ct), ct);
 
             // ETAPA 2/4 — Infraestrutura Linux & Docker (WSL 2)
             await ExecutarEtapaAsync(2, progresso, log, async () =>
@@ -165,15 +162,18 @@ public sealed class InstaladorManager
         }
     }
 
-    private Task<(string CaminhoExe, string AtalhoDesktop)> ExecutarStep1ExtracaoPainelAsync(
+    private async Task<(string CaminhoExe, string AtalhoDesktop)> ExecutarStep1ExtracaoPainelEBancoAsync(
         ConfiguracaoInstalacao config,
-        AuditorLog log)
+        AuditorLog log,
+        CancellationToken ct)
     {
         string pastaDestino = config.DiretorioInstalacao;
         string caminhoExe = _extrator.ExtrairPainelControle(pastaDestino, log);
 
         _extrator.ExtrairScriptsSqlAuxiliares(pastaDestino, log);
+        await _sqlDeployer.GarantirBancoEExecutarScriptsAsync(config, log, ct);
         _extrator.InjetarConfiguracaoAppSettings(pastaDestino, config, log);
+
         string caminhoIcone = _extrator.ExtrairIconeAdviceParaDisco(pastaDestino, log);
 
         string atalho = string.Empty;
@@ -188,7 +188,7 @@ public sealed class InstaladorManager
                 log: log);
         }
 
-        return Task.FromResult((caminhoExe, atalho));
+        return (caminhoExe, atalho);
     }
 
     private async Task ExecutarStepDownloadSupersetAsync(
@@ -641,12 +641,7 @@ public sealed class InstaladorManager
             string sqlHostExplicit = string.Empty;
             string sqlPort = "1433";
 
-            bool ehHostLocal = rawHost.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-                || rawHost.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
-                || rawHost.Equals(".", StringComparison.OrdinalIgnoreCase)
-                || rawHost.Equals("(local)", StringComparison.OrdinalIgnoreCase)
-                || rawHost.StartsWith("localhost\\", StringComparison.OrdinalIgnoreCase)
-                || rawHost.StartsWith(".\\", StringComparison.OrdinalIgnoreCase);
+            bool ehHostLocal = SqlDatabaseDeployer.EhHostLocal(rawHost);
 
             if (!ehHostLocal)
             {
@@ -668,14 +663,26 @@ public sealed class InstaladorManager
             }
 
             int parsedSqlPort = int.TryParse(sqlPort, out int pPort) && pPort > 0 ? pPort : 1433;
-            string sqlUser = Uri.EscapeDataString(config.SqlServerUsuario);
-            string sqlPass = Uri.EscapeDataString(config.SqlServerSenha);
-            string sqlDb = Uri.EscapeDataString(config.SqlServerBanco);
+            var (sqlUserSuperset, sqlPassSuperset, ehCredencialDedicada) = config.ObterCredenciaisSqlSuperset();
             string sqlDbRaw = EscaparArgBashSimples(config.SqlServerBanco);
             string containerName = EscaparArgBashSimples(config.NomeConteinerSuperset);
 
+            if (ehCredencialDedicada)
+            {
+                log.Info($"Credencial SQL para o Apache Superset: login dedicado '{sqlUserSuperset}' (Autenticação Windows utilizada na Etapa 1).");
+            }
+            else
+            {
+                log.Info($"Credencial SQL para o Apache Superset: usuário SQL explícito '{sqlUserSuperset}'.");
+            }
+
             string probeCode =
-                "import base64, json, sys, pymssql\n" +
+                "import base64, json, socket, sys\n" +
+                "try:\n" +
+                "    import pymssql\n" +
+                "except Exception as imp_err:\n" +
+                "    pymssql = None\n" +
+                "    print(f'[AVISO] Driver pymssql indisponivel no conteiner: {imp_err}', file=sys.stderr, flush=True)\n" +
                 "cfg = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))\n" +
                 "wsl_ips = [x.strip() for x in sys.argv[2:] if x and x.strip()]\n" +
                 "static_hosts = ['host.docker.internal', '127.0.0.1', 'localhost', '172.20.48.1', '172.29.112.1']\n" +
@@ -685,35 +692,48 @@ public sealed class InstaladorManager
                 "    raw_order = wsl_ips + static_hosts\n" +
                 "seen = set()\n" +
                 "candidates = [h for h in raw_order if h and not (h in seen or seen.add(h))]\n" +
+                "port = int(cfg['port'])\n" +
                 "found = None\n" +
-                "for h in candidates:\n" +
-                "    try:\n" +
-                "        conn = pymssql.connect(server=h, port=int(cfg['port']), user=cfg['user'], password=cfg['password'], database=cfg['database'], login_timeout=4)\n" +
-                "        cur = conn.cursor()\n" +
-                "        cur.execute('SELECT 1')\n" +
-                "        cur.fetchone()\n" +
-                "        conn.close()\n" +
-                "        found = h\n" +
-                "        print(f'[OK_SQL_HOST]{h}')\n" +
-                "        break\n" +
-                "    except Exception as e:\n" +
-                "        print(f'[DEBUG_HOST] Conexao com {h}:{cfg[\"port\"]} falhou: {e}', file=sys.stderr)\n" +
+                "if pymssql is not None:\n" +
+                "    for h in candidates:\n" +
+                "        try:\n" +
+                "            conn = pymssql.connect(server=h, port=port, user=cfg['user'], password=cfg['password'], database=cfg['database'], login_timeout=4)\n" +
+                "            cur = conn.cursor()\n" +
+                "            cur.execute('SELECT 1')\n" +
+                "            cur.fetchone()\n" +
+                "            conn.close()\n" +
+                "            found = h\n" +
+                "            print(f'[OK] pymssql SELECT 1 validado em {h}:{port}', flush=True)\n" +
+                "            print(f'[OK_SQL_HOST]{h}', flush=True)\n" +
+                "            break\n" +
+                "        except Exception as e:\n" +
+                "            print(f'[ERRO_PYMSSQL] {h}:{port}: {str(e)}', file=sys.stderr, flush=True)\n" +
+                "if not found:\n" +
+                "    for h in candidates:\n" +
+                "        try:\n" +
+                "            with socket.create_connection((h, port), timeout=3):\n" +
+                "                found = h\n" +
+                "                print(f'[AVISO_TCP] Porta TCP {port} respondeu em {h}; prosseguindo para deploy apesar da falha no pymssql.', flush=True)\n" +
+                "                print(f'[OK_SQL_HOST]{h}', flush=True)\n" +
+                "                break\n" +
+                "        except Exception as se:\n" +
+                "            print(f'[ERRO_TCP] {h}:{port}: {str(se)}', file=sys.stderr, flush=True)\n" +
                 "if not found:\n" +
                 "    sys.exit(1)\n";
 
             string pyCodeB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(probeCode));
             string cfgJson = JsonSerializer.Serialize(new
             {
-                user = config.SqlServerUsuario,
-                password = config.SqlServerSenha,
+                user = sqlUserSuperset,
+                password = sqlPassSuperset,
                 database = config.SqlServerBanco,
                 port = parsedSqlPort,
                 explicit_host = sqlHostExplicit
             });
             string cfgJsonB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(cfgJson));
 
-            // Descobre IP do host Windows alcançável pelo WSL2/Docker executando teste pymssql de dentro do contêiner
-            string scriptDeploy = $$"""
+            // 1. Executa sonda dentro do contêiner e captura [OK_SQL_HOST] / [PY_BIN] diretamente no C#
+            string scriptProbe = $$"""
                 set -e
 
                 {{WslEngine.ScriptIsolamentoDockerBash}}
@@ -721,6 +741,7 @@ public sealed class InstaladorManager
                 SQL_PORT="{{parsedSqlPort}}"
                 ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
                 NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+                echo "[INF] Candidatos de rede WSL -> host Windows: ROUTE_IP=${ROUTE_IP:-vazio}, NS_IP=${NS_IP:-vazio}"
 
                 PY_BIN=$(docker exec '{{containerName}}' sh -c 'for py in /app/.venv/bin/python "$(command -v python3 2>/dev/null || true)"; do if [ -n "$py" ] && [ -x "$py" ] && "$py" -c "import pymssql" >/dev/null 2>&1; then echo "$py"; exit 0; fi; done; if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi' < /dev/null)
                 if [ -z "$PY_BIN" ]; then
@@ -728,36 +749,75 @@ public sealed class InstaladorManager
                     exit 1
                 fi
 
-                echo "[INF] Testando conectividade direta com SQL Server a partir do contêiner '{{containerName}}' ($PY_BIN)..."
+                echo "[PY_BIN]${PY_BIN}"
+                echo "[INF] Testando conectividade direta com SQL Server '{{sqlDbRaw}}' porta $SQL_PORT a partir do contêiner '{{containerName}}' ($PY_BIN)..."
 
-                PROBE_OUT=$(docker exec '{{containerName}}' "$PY_BIN" -c "import base64; exec(base64.b64decode('{{pyCodeB64}}').decode('utf-8'))" \
+                set +e
+                docker exec '{{containerName}}' "$PY_BIN" -c "import base64; exec(base64.b64decode('{{pyCodeB64}}').decode('utf-8'))" \
                     "{{cfgJsonB64}}" \
                     "$ROUTE_IP" \
-                    "$NS_IP" < /dev/null 2>&1 || true)
+                    "$NS_IP" < /dev/null
+                PROBE_RC=$?
+                set -e
+                exit "$PROBE_RC"
+                """;
 
-                TARGET_HOST=$(echo "$PROBE_OUT" | awk -F'\\[OK_SQL_HOST\\]' '/\\[OK_SQL_HOST\\]/ {print $2; exit}')
+            ResultadoComando resProbe = await _wslEngine.ExecutarBashWslAsync(
+                config.WslDistro,
+                scriptProbe,
+                comoRoot: true,
+                log: log,
+                registrarLinhasNoLog: true,
+                timeout: TimeSpan.FromMinutes(3),
+                ct: ct);
 
-                if [ -z "$TARGET_HOST" ]; then
-                    echo "$PROBE_OUT"
-                    DEFAULT_TEST="$ROUTE_IP"
-                    [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="$NS_IP"
-                    [ -z "$DEFAULT_TEST" ] && DEFAULT_TEST="172.20.48.1"
-                    echo "[AVISO] SQL Server porta $SQL_PORT ou banco '{{sqlDbRaw}}' não acessível de dentro do contêiner nos endereços testados."
-                    echo "[AVISO] Endereço provável do Windows: $DEFAULT_TEST. Verifique se o serviço do SQL Server está ativo com TCP/IP e se o firewall permite conexões."
-                    exit 42
-                fi
+            string saidaProbe = $"{resProbe.StdOut}\n{resProbe.StdErr}";
+            Match matchPy = Regex.Match(saidaProbe, @"\[PY_BIN\]\s*([^\r\n\s]+)");
+            string pyBin = matchPy.Success ? matchPy.Groups[1].Value.Trim() : "/app/.venv/bin/python";
 
-                echo "[OK] Conexão com SQL Server validada de dentro do contêiner: ${TARGET_HOST}:${SQL_PORT} (driver pymssql)"
+            Match matchHost = Regex.Match(saidaProbe, @"\[OK_SQL_HOST\]\s*([^\r\n\s]+)");
+            string? targetHost = matchHost.Success ? matchHost.Groups[1].Value.Trim() : null;
 
-                DB_URI="mssql+pymssql://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}"
+            if (string.IsNullOrWhiteSpace(targetHost))
+            {
+                if (!resProbe.Sucesso && saidaProbe.Contains("Interpretador Python não encontrado", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Interpretador Python não localizado dentro do contêiner '{config.NomeConteinerSuperset}'.\n{WslEngine.FormatarResumoErro(resProbe)}");
+                }
+
+                log.Aviso(
+                    $"SQL Server porta {parsedSqlPort} ou banco '{config.SqlServerBanco}' não acessível de dentro do contêiner nos endereços testados. " +
+                    $"Os scripts SQL foram salvos em '{Path.Combine(config.DiretorioInstalacao, "database")}'. " +
+                    "Após garantir TCP/IP (porta 1433) e Mixed Mode Authentication no SQL Server, abra o 'Painel Movidesk BI' e clique em 'Executar Setup Automático'.");
+                ReportarEtapa(progresso, 4, StatusEtapa.Aviso);
+                return true;
+            }
+
+            // 2. Constroi a SQLAlchemy URI com o host respondente capturado no C# e dispara imediatamente setup_superset_auto.py
+            string sqlUserEscapedUri = Uri.EscapeDataString(sqlUserSuperset);
+            string sqlPassEscapedUri = Uri.EscapeDataString(sqlPassSuperset);
+            string sqlDbEscapedUri = Uri.EscapeDataString(config.SqlServerBanco);
+            string dbUri = $"mssql+pymssql://{sqlUserEscapedUri}:{sqlPassEscapedUri}@{targetHost}:{parsedSqlPort}/{sqlDbEscapedUri}";
+
+            log.Sucesso($"Host SQL Server validado para o Superset: {targetHost}:{parsedSqlPort} (usuário '{sqlUserSuperset}'). Prosseguindo com o deploy do Dashboard...");
+
+            string pyBinBash = EscaparArgBashSimples(pyBin);
+            string dbUriBash = EscaparArgBashSimples(dbUri);
+            string scriptPathBash = EscaparArgBashSimples(scriptPathWsl);
+
+            string scriptDeploy = $$"""
+                set -e
+
+                {{WslEngine.ScriptIsolamentoDockerBash}}
 
                 echo "[INF] Executando deploy do Dashboard Movidesk BI diretamente de dentro do contêiner '{{containerName}}' (http://127.0.0.1:8088)..."
-                docker exec -i '{{containerName}}' "$PY_BIN" - \
+                docker exec -i '{{containerName}}' '{{pyBinBash}}' - \
                     --url "http://127.0.0.1:8088" \
                     --username '{{userSuperset}}' \
                     --password '{{passSuperset}}' \
                     --db-name "MovideskDM" \
-                    --db-uri "$DB_URI" < '{{EscaparArgBashSimples(scriptPathWsl)}}'
+                    --db-uri '{{dbUriBash}}' < '{{scriptPathBash}}'
                 """;
 
             ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(
@@ -769,12 +829,12 @@ public sealed class InstaladorManager
                 timeout: TimeSpan.FromMinutes(10),
                 ct: ct);
 
-            if (res.ExitCode == 42 || (!res.Sucesso && IndicaBancoAindaNaoCriado(res)))
+            if (!res.Sucesso && IndicaBancoAindaNaoCriado(res))
             {
                 log.Aviso(
-                    "SQL Server porta 1433 ou banco 'MovideskDM' ainda não acessível a partir do WSL2 neste momento. " +
+                    $"O Superset atingiu {targetHost}:{parsedSqlPort}, mas o banco '{config.SqlServerBanco}' ou credencial SQL ainda requer ajuste. " +
                     $"Os scripts SQL foram salvos em '{Path.Combine(config.DiretorioInstalacao, "database")}'. " +
-                    "Após criar o banco MovideskDM e liberar TCP/IP no SQL Server, abra o 'Painel Movidesk BI' e clique em 'Executar Setup Automático'.");
+                    "Após ajustar o banco MovideskDM/Mixed Mode no SQL Server, abra o 'Painel Movidesk BI' e clique em 'Executar Setup Automático'.");
                 ReportarEtapa(progresso, 4, StatusEtapa.Aviso);
                 return true;
             }

@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 
@@ -86,7 +87,7 @@ public sealed class SupersetService : IDisposable
         string? configuredDbUri = configuration["Superset:SqlAlchemyUri"];
         _hasExplicitDbUri = !string.IsNullOrWhiteSpace(configuredDbUri);
         _supersetDbUri = string.IsNullOrWhiteSpace(configuredDbUri)
-            ? "mssql+pymssql://sa:123456@172.29.112.1:1433/MovideskDM"
+            ? "mssql+pymssql://superset_bi:Advice%40Superset2026%21@172.29.112.1:1433/MovideskDM"
             : configuredDbUri.Trim();
     }
 
@@ -527,18 +528,18 @@ public sealed class SupersetService : IDisposable
                 ? _supersetDbUri
                 : $"mssql+pymssql://{Uri.EscapeDataString(sqlUser)}:{Uri.EscapeDataString(sqlPass)}@{configuredHost}:{sqlPort}/{Uri.EscapeDataString(sqlDb)}";
 
-            AppendSetupLog("[INF] Passo 1/3 — Validando conectividade real com SQL Server (pymssql) de dentro do contêiner Docker...");
+            AppendSetupLog($"[INF] Passo 1/3 — Validando conectividade com SQL Server (usuário '{sqlUser}') de dentro do contêiner Docker...");
             string? workingHost = await ProbeWorkingSqlHostInsideContainerAsync(
                 sqlUser, sqlPass, sqlDb, sqlPort, configuredHost, isRemoteHost);
 
             if (!string.IsNullOrWhiteSpace(workingHost))
             {
                 targetDbUri = $"mssql+pymssql://{Uri.EscapeDataString(sqlUser)}:{Uri.EscapeDataString(sqlPass)}@{workingHost}:{sqlPort}/{Uri.EscapeDataString(sqlDb)}";
-                AppendSetupLog($"[OK] Conexão SQL Server validada de dentro do contêiner em '{workingHost}:{sqlPort}' (banco '{sqlDb}').");
+                AppendSetupLog($"[OK] Host SQL Server validado de dentro do contêiner em '{workingHost}:{sqlPort}' (banco '{sqlDb}').");
             }
             else
             {
-                AppendSetupLog($"[AVISO] Nenhum endereço respondeu ao teste pymssql interno; prosseguindo com host '{configuredHost}:{sqlPort}'.");
+                AppendSetupLog($"[AVISO] Nenhum endereço respondeu ao teste pymssql/TCP interno; prosseguindo com host '{configuredHost}:{sqlPort}'.");
             }
 
             AppendSetupLog("[INF] Passo 1/3 — Registrando/atualizando conexão Database 'MovideskDM' no Superset...");
@@ -578,8 +579,8 @@ public sealed class SupersetService : IDisposable
 
     private (string User, string Pass, string Database, int Port, string Host, bool IsRemoteHost) ParseDbCredentials()
     {
-        string user = "sa";
-        string pass = "123456";
+        string user = "superset_bi";
+        string pass = "Advice@Superset2026!";
         string database = "MovideskDM";
         int port = 1433;
         string host = "127.0.0.1";
@@ -596,7 +597,7 @@ public sealed class SupersetService : IDisposable
                 {
                     if (!string.IsNullOrWhiteSpace(uri.UserInfo))
                     {
-                        var parts = uri.UserInfo.Split(':');
+                        var parts = uri.UserInfo.Split(':', 2);
                         if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0])) user = Uri.UnescapeDataString(parts[0]);
                         if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])) pass = Uri.UnescapeDataString(parts[1]);
                     }
@@ -610,8 +611,17 @@ public sealed class SupersetService : IDisposable
             else if (!string.IsNullOrWhiteSpace(_sqlConnectionString))
             {
                 var builder = new SqlConnectionStringBuilder(_sqlConnectionString);
-                if (!string.IsNullOrWhiteSpace(builder.UserID)) user = builder.UserID;
-                if (!string.IsNullOrEmpty(builder.Password)) pass = builder.Password;
+                if (!builder.IntegratedSecurity && !string.IsNullOrWhiteSpace(builder.UserID))
+                {
+                    user = builder.UserID.Trim();
+                    pass = builder.Password ?? string.Empty;
+                }
+                else
+                {
+                    user = "superset_bi";
+                    pass = "Advice@Superset2026!";
+                }
+
                 if (!string.IsNullOrWhiteSpace(builder.InitialCatalog)) database = builder.InitialCatalog;
 
                 string rawServer = builder.DataSource?.Trim() ?? "localhost";
@@ -653,13 +663,15 @@ public sealed class SupersetService : IDisposable
     private static bool EhHostLocal(string rawHost)
     {
         if (string.IsNullOrWhiteSpace(rawHost)) return true;
-        string h = rawHost.Trim();
+        string h = rawHost.Trim().Split(',')[0].Trim();
         return h.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || h.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
             || h.Equals(".", StringComparison.OrdinalIgnoreCase)
             || h.Equals("(local)", StringComparison.OrdinalIgnoreCase)
             || h.StartsWith("localhost\\", StringComparison.OrdinalIgnoreCase)
-            || h.StartsWith(".\\", StringComparison.OrdinalIgnoreCase);
+            || h.StartsWith(".\\", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith("127.0.0.1\\", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith("(local)\\", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<string?> ProbeWorkingSqlHostInsideContainerAsync(
@@ -679,7 +691,12 @@ public sealed class SupersetService : IDisposable
         try
         {
             const string pyCode = """
-import base64, json, sys, pymssql
+import base64, json, socket, sys
+try:
+    import pymssql
+except Exception as imp_err:
+    pymssql = None
+    print(f'[AVISO] Driver pymssql indisponivel no conteiner: {imp_err}', file=sys.stderr, flush=True)
 cfg = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 wsl_ips = [x.strip() for x in sys.argv[2:] if x and x.strip()]
 if cfg.get('is_remote') and cfg.get('configured_host'):
@@ -688,24 +705,34 @@ else:
     raw_order = wsl_ips + ['host.docker.internal', '127.0.0.1', cfg.get('configured_host', ''), '172.20.48.1', '172.29.112.1']
 seen = set()
 ordered = [h for h in raw_order if h and not (h in seen or seen.add(h))]
+port = int(cfg['port'])
+if pymssql is not None:
+    for h in ordered:
+        try:
+            conn = pymssql.connect(
+                server=h,
+                port=port,
+                user=cfg['user'],
+                password=cfg['password'],
+                database=cfg['database'],
+                login_timeout=4
+            )
+            cur = conn.cursor()
+            cur.execute('SELECT 1')
+            cur.fetchone()
+            conn.close()
+            print(f'[SQL_HOST_OK]{h}', flush=True)
+            sys.exit(0)
+        except Exception as e:
+            print(f'[ERRO_PYMSSQL] {h}:{port}: {str(e)}', file=sys.stderr, flush=True)
 for h in ordered:
     try:
-        conn = pymssql.connect(
-            server=h,
-            port=int(cfg['port']),
-            user=cfg['user'],
-            password=cfg['password'],
-            database=cfg['database'],
-            login_timeout=4
-        )
-        cur = conn.cursor()
-        cur.execute('SELECT 1')
-        cur.fetchone()
-        conn.close()
-        print(f'[SQL_HOST_OK]{h}')
-        sys.exit(0)
-    except Exception as e:
-        print(f'[SQL_HOST_ERR]{h}: {e}', file=sys.stderr)
+        with socket.create_connection((h, port), timeout=3):
+            print(f'[AVISO_TCP] Porta TCP {port} respondeu em {h}; prosseguindo apesar da falha no pymssql.', flush=True)
+            print(f'[SQL_HOST_OK]{h}', flush=True)
+            sys.exit(0)
+    except Exception as se:
+        print(f'[ERRO_TCP] {h}:{port}: {str(se)}', file=sys.stderr, flush=True)
 sys.exit(1)
 """;
 
@@ -764,24 +791,28 @@ sys.exit(1)
             await proc.WaitForExitAsync(cancellationToken);
 
             string outStr = output.ToString();
-            const string marker = "[SQL_HOST_OK]";
-            int idx = outStr.IndexOf(marker, StringComparison.Ordinal);
-            if (idx >= 0)
+            string errStr = errorOutput.ToString();
+            string combined = $"{outStr}\n{errStr}";
+
+            foreach (string diagLine in combined.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
-                string line = outStr[idx..].Split(['\r', '\n'])[0];
-                string host = line[marker.Length..].Trim();
-                if (!string.IsNullOrWhiteSpace(host))
+                string trimmedLine = diagLine.Trim();
+                if (trimmedLine.StartsWith("[ERRO_PYMSSQL]", StringComparison.Ordinal) ||
+                    trimmedLine.StartsWith("[AVISO_TCP]", StringComparison.Ordinal) ||
+                    trimmedLine.StartsWith("[ERRO_TCP]", StringComparison.Ordinal) ||
+                    trimmedLine.StartsWith("[AVISO]", StringComparison.Ordinal))
                 {
-                    return host;
+                    AppendSetupLog($"[DIAG] {trimmedLine}");
                 }
             }
 
-            string errStr = errorOutput.ToString().Trim();
-            if (!string.IsNullOrWhiteSpace(errStr))
+            Match hostMatch = Regex.Match(combined, @"\[SQL_HOST_OK\]\s*([^\r\n\s]+)");
+            if (hostMatch.Success)
             {
-                foreach (string errLine in errStr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+                string host = hostMatch.Groups[1].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(host))
                 {
-                    AppendSetupLog($"[DIAG] {errLine}");
+                    return host;
                 }
             }
         }

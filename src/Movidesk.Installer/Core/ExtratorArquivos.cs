@@ -176,8 +176,12 @@ public sealed class ExtratorArquivos
 
         // Seção ConnectionStrings
         var connStrings = rootObj["ConnectionStrings"] as JsonObject ?? new JsonObject();
-        connStrings["MovideskDM"] =
-            $"Server={config.SqlServerHost};Database={config.SqlServerBanco};User Id={config.SqlServerUsuario};Password={config.SqlServerSenha};TrustServerCertificate=True;MultipleActiveResultSets=True;";
+        string effectiveSqlUser = config.UsouAutenticacaoWindows ? string.Empty : config.SqlServerUsuario;
+        connStrings["MovideskDM"] = SqlDatabaseDeployer.ConstruirConnectionString(
+            config.SqlServerHost,
+            config.SqlServerBanco,
+            effectiveSqlUser,
+            config.SqlServerSenha);
         rootObj["ConnectionStrings"] = connStrings;
 
         // Seção Superset

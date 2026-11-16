@@ -250,3 +250,21 @@ Após diagnóstico em ambiente real Windows + WSL 2 onde a Etapa 4 excedia 90 se
 5. **Log Explícito de Cada Tentativa na Etapa 4 & Deploy Direto de Dentro do Contêiner:**
    - [`AguardarSupersetApiProntaAsync`](../../src/Movidesk.Installer/Core/WslEngine.cs) passou a registrar no log o status HTTP ou exceção real de cada tentativa (`Tentativa N: /health=..., /login=...`).
    - O deploy do script [`setup_superset_auto.py`](../../superset/setup_superset_auto.py) na Etapa 4 é executado via `docker exec -i advice_movidesk_superset "$PY_BIN" - --url "http://127.0.0.1:8088" ... < setup_superset_auto.py`, comunicando-se internamente via loopback do contêiner e apontando para o IP Windows validado na porta `1433`.
+
+---
+
+### Fase 11 — Autenticação Mixed Mode Automática, Login `superset_bi` e Parser Nativo `[OK_SQL_HOST]` em C# (15/11/2026)
+
+Após confirmar que a REST API do Superset inicializava na primeira tentativa (`Tentativa 1: /health=200, /login=200`), a Etapa 4 ainda abortava imprimindo `[OK_SQL_HOST]172.18.160.1` seguido de `[AVISO] SQL Server porta 1433 ou banco 'MovideskDM' não acessível` por falha de escape na leitura `awk` em Bash e falta de suporte do `pymssql` à Autenticação Windows pura. Foram aplicadas 3 correções definitivas:
+
+1. **Garantia de Mixed Mode (`LoginMode = 2`) & Login Dedicado `superset_bi` na Etapa 1:**
+   - [`SqlDatabaseDeployer.cs`](../../src/Movidesk.Installer/Core/SqlDatabaseDeployer.cs) agora suporta Autenticação Windows direta (campo Usuário SQL vazio em [`FrmInstalador.cs`](../../src/Movidesk.Installer/UI/FrmInstalador.cs)) e *fallback* automático para Autenticação Windows caso o login SQL em host local falhe, atualizando `appsettings.json` em [`ExtratorArquivos.cs`](../../src/Movidesk.Installer/Core/ExtratorArquivos.cs) após o provisionamento SQL.
+   - Inspeção automática de `SERVERPROPERTY('IsIntegratedSecurityOnly')`: quando em modo somente Windows, habilita `LoginMode = 2` via `xp_instance_regwrite` + Registro 64 bits do Windows (`HKLM\...\MSSQLServer\LoginMode`) e reinicia o serviço local do SQL Server (`MSSQLSERVER` / `MSSQL$<Instância>`).
+   - Criação/atualização idempotente do login SQL dedicado **`superset_bi`** (`CHECK_POLICY = OFF`, `CHECK_EXPIRATION = OFF`, `ENABLE`, permissão `[db_owner]` em `[MovideskDM]` e `[sysadmin]` quando permitido), utilizado automaticamente pelo Instalador ([`ModelosInstalacao.cs`](../../src/Movidesk.Installer/Core/ModelosInstalacao.cs)) e pelo Painel de Controle ([`SupersetService.cs`](../../src/Movidesk.ControlPanel/Services/SupersetService.cs)) quando a conexão local usa Autenticação Integrada.
+
+2. **Diagnóstico Explícito `[ERRO_PYMSSQL]` / `[ERRO_TCP]` & Captura via `Regex` em C#:**
+   - Remoção do parser `awk` em Bash que perdia a variável `TARGET_HOST` em [`InstaladorManager.cs`](../../src/Movidesk.Installer/Core/InstaladorManager.cs). Tanto a Etapa 4 quanto `ProbeWorkingSqlHostInsideContainerAsync` em [`SupersetService.cs`](../../src/Movidesk.ControlPanel/Services/SupersetService.cs) extraem `[OK_SQL_HOST]` / `[SQL_HOST_OK]` e `[PY_BIN]` diretamente em C# (`Regex.Match(...).Groups[1].Value.Trim()`).
+   - Cada falha de conexão `pymssql.connect()` exibe o erro real em `[ERRO_PYMSSQL] {ip}:{porta}: {exceção}`, com fallback explícito via socket TCP (`[AVISO_TCP]`).
+
+3. **Execução Imediata do Deploy Quando o Host SQL Responde:**
+   - Sempre que `[OK_SQL_HOST]` retorna um endereço válido (via `pymssql` ou socket TCP na porta 1433), o Instalador monta a URI escapada com `Uri.EscapeDataString` diretamente no C# e dispara `setup_superset_auto.py` para provisionar `MovideskDM`, os 9 Datasets, os 15 Gráficos e o `Dashboard - Movidesk BI`.

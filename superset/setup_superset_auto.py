@@ -313,19 +313,21 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
                 updated_uri = f"mssql+pymssql://{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}@{candidate}:{port}/{urllib.parse.quote(database, safe='')}"
                 print(f"[OK] Conexão com SQL Server validada via pymssql em {candidate}:{port}.", flush=True)
                 return updated_uri
-            except Exception:
+            except Exception as exc:
+                print(f"[ERRO_PYMSSQL] {candidate}: {str(exc)}", file=sys.stderr, flush=True)
                 continue
-    except ImportError:
-        pass
+    except ImportError as imp_exc:
+        print(f"[AVISO] Driver pymssql indisponível neste interpretador Python ({imp_exc}).", file=sys.stderr, flush=True)
 
     # 2. Fallback via socket TCP
     for candidate in candidate_hosts:
         try:
             with socket.create_connection((candidate, port), timeout=2.0):
                 updated_uri = f"mssql+pymssql://{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}@{candidate}:{port}/{urllib.parse.quote(database, safe='')}"
-                print(f"[OK] Conectividade TCP com SQL Server confirmada em {candidate}:{port}.", flush=True)
+                print(f"[AVISO_TCP] Socket TCP {port} respondeu em {candidate}; prosseguindo com este host.", flush=True)
                 return updated_uri
-        except Exception:
+        except Exception as sock_exc:
+            print(f"[ERRO_TCP] {candidate}:{port}: {str(sock_exc)}", file=sys.stderr, flush=True)
             continue
 
     print(f"[INFO] Mantendo URI padrão ({preferred_host}:{port}).", flush=True)

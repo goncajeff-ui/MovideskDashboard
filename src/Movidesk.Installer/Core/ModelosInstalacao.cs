@@ -33,6 +33,9 @@ public sealed record ResultadoComando(
 
 public sealed class ConfiguracaoInstalacao
 {
+    public const string SupersetSqlLoginPadrao = "superset_bi";
+    public const string SupersetSqlSenhaPadrao = "Advice@Superset2026!";
+
     public string ApiKey { get; set; } = string.Empty;
     public string DiretorioInstalacao { get; set; } = @"C:\Advice\MovideskBI";
     public string WslDistro { get; set; } = "Ubuntu";
@@ -45,8 +48,19 @@ public sealed class ConfiguracaoInstalacao
     public string SqlServerUsuario { get; set; } = "sa";
     public string SqlServerSenha { get; set; } = "123456";
     public string SqlServerBanco { get; set; } = "MovideskDM";
+    public bool UsouAutenticacaoWindows { get; set; }
     public bool CriarAtalhoDesktop { get; set; } = true;
     public bool ConfigurarFirewall { get; set; } = true;
+
+    public (string UsuarioSql, string SenhaSql, bool EhCredencialDedicada) ObterCredenciaisSqlSuperset()
+    {
+        if (!UsouAutenticacaoWindows && !string.IsNullOrWhiteSpace(SqlServerUsuario))
+        {
+            return (SqlServerUsuario.Trim(), SqlServerSenha ?? string.Empty, false);
+        }
+
+        return (SupersetSqlLoginPadrao, SupersetSqlSenhaPadrao, true);
+    }
 }
 
 public sealed class ResultadoInstalacao
