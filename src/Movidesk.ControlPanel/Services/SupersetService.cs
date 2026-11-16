@@ -80,7 +80,8 @@ public sealed class SupersetService : IDisposable
         _venvActivatePath = configuration["Superset:VenvActivatePath"] ?? "~/superset-env/bin/activate";
         _secretKey = configuration["Superset:SecretKey"] ?? "movidesk_superset_super_secret_key_2026";
         _port = int.TryParse(configuration["Superset:Port"], out var parsedPort) ? parsedPort : 8088;
-        _supersetUrl = (configuration["Superset:Url"] ?? $"http://localhost:{_port}").TrimEnd('/');
+        string rawUrl = (configuration["Superset:Url"] ?? $"http://127.0.0.1:{_port}").TrimEnd('/');
+        _supersetUrl = rawUrl.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase);
         _sqlConnectionString = configuration.GetConnectionString("MovideskDM");
         string? configuredDbUri = configuration["Superset:SqlAlchemyUri"];
         _hasExplicitDbUri = !string.IsNullOrWhiteSpace(configuredDbUri);
@@ -411,7 +412,7 @@ public sealed class SupersetService : IDisposable
     }
 
     // =========================================================================
-    // AUTOMAÇÃO 100% NATIVA EM C# (HTTPCLIENT DIRETO EM localhost:8088)
+    // AUTOMAÇÃO 100% NATIVA EM C# (HTTPCLIENT DIRETO EM 127.0.0.1:8088)
     // Zero dependência de wsl.exe / Python externo — imune a erros Win32!
     // =========================================================================
 
@@ -431,7 +432,7 @@ public sealed class SupersetService : IDisposable
 
     /// <summary>
     /// Executa o setup completo do Apache Superset 100% nativamente em C# via HttpClient
-    /// consumindo diretamente a REST API em http://localhost:8088 (sem invocar wsl.exe).
+    /// consumindo diretamente a REST API em http://127.0.0.1:8088 (sem invocar wsl.exe).
     /// </summary>
     public async Task RunAutoSetupAsync(string adminPassword, string adminUsername = "admin")
     {
@@ -682,9 +683,9 @@ import base64, json, sys, pymssql
 cfg = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
 wsl_ips = [x.strip() for x in sys.argv[2:] if x and x.strip()]
 if cfg.get('is_remote') and cfg.get('configured_host'):
-    raw_order = [cfg['configured_host']] + wsl_ips + ['host.docker.internal', '127.0.0.1']
+    raw_order = [cfg['configured_host']] + wsl_ips + ['host.docker.internal', '127.0.0.1', '172.20.48.1', '172.29.112.1']
 else:
-    raw_order = wsl_ips + ['host.docker.internal', '127.0.0.1', cfg.get('configured_host', '')]
+    raw_order = wsl_ips + ['host.docker.internal', '127.0.0.1', cfg.get('configured_host', ''), '172.20.48.1', '172.29.112.1']
 seen = set()
 ordered = [h for h in raw_order if h and not (h in seen or seen.add(h))]
 for h in ordered:
@@ -728,7 +729,7 @@ sys.exit(1)
                 "NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true); " +
                 $"CN=$(docker ps --format '{{{{.Names}}}}' | grep -E '^({_containerName}|advice_movidesk_superset|superset-movidesk)$' | head -n 1 || true); " +
                 "[ -n \"$CN\" ] || { echo '[AVISO] Nenhum contêiner Superset em execução encontrado no Docker.' >&2; exit 1; }; " +
-                "PY_BIN=$(docker exec \"$CN\" sh -c 'if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi'); " +
+                "PY_BIN=$(docker exec \"$CN\" sh -c 'for py in /app/.venv/bin/python \"$(command -v python3 2>/dev/null || true)\"; do if [ -n \"$py\" ] && [ -x \"$py\" ] && \"$py\" -c \"import pymssql\" >/dev/null 2>&1; then echo \"$py\"; exit 0; fi; done; if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi'); " +
                 "[ -n \"$PY_BIN\" ] || { echo '[AVISO] Interpretador Python não encontrado no contêiner.' >&2; exit 1; }; " +
                 $"docker exec \"$CN\" \"$PY_BIN\" -c \"import base64; exec(base64.b64decode('{pyCodeB64}').decode('utf-8'))\" \"{cfgJsonB64}\" \"$ROUTE_IP\" \"$NS_IP\"";
 
@@ -805,12 +806,25 @@ sys.exit(1)
         DateTime deadline = DateTime.UtcNow.AddSeconds(45);
         HttpStatusCode status = 0;
         string body = string.Empty;
+        string? lastError = null;
+        int attempt = 0;
 
         while (true)
         {
+            attempt++;
             try
             {
                 (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Post, "/api/v1/security/login", loginPayload, timeoutSeconds: 30, maxRetries: 0);
+                if ((int)status >= 200 && (int)status < 300)
+                {
+                    break;
+                }
+
+                lastError = $"HTTP {(int)status}";
+                string bodyPreview = string.IsNullOrWhiteSpace(body) ? string.Empty : body.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                if (bodyPreview.Length > 160) bodyPreview = bodyPreview[..160] + "...";
+                AppendSetupLog($"[INF] Tentativa {attempt} /login={(int)status} em {apiClient.BaseAddress}: {bodyPreview}");
+
                 if (status != HttpStatusCode.BadGateway &&
                     status != HttpStatusCode.ServiceUnavailable &&
                     status != HttpStatusCode.GatewayTimeout &&
@@ -819,9 +833,10 @@ sys.exit(1)
                     break;
                 }
             }
-            catch (Exception) when (DateTime.UtcNow < deadline)
+            catch (Exception ex) when (DateTime.UtcNow < deadline)
             {
-                // Continua tentando enquanto o worker Flask/Gunicorn termina a inicialização
+                lastError = $"{ex.GetType().Name}: {ex.Message}";
+                AppendSetupLog($"[INF] Tentativa {attempt} /login falhou ({lastError}). Nova tentativa em 2s...");
             }
 
             if (DateTime.UtcNow >= deadline)
@@ -836,12 +851,12 @@ sys.exit(1)
         {
             throw new InvalidOperationException(
                 $"Senha incorreta para o usuário '{username}' no Apache Superset (HTTP 401 UNAUTHORIZED). " +
-                "Verifique a senha digitada (a mesma que você usa para logar em http://localhost:8088).");
+                "Verifique a senha digitada (a mesma que você usa para logar em http://127.0.0.1:8088).");
         }
 
         if ((int)status < 200 || (int)status >= 300)
         {
-            throw new InvalidOperationException($"Falha no login do Superset (HTTP {(int)status}): {body}");
+            throw new InvalidOperationException($"Falha no login do Superset ({lastError ?? $"HTTP {(int)status}"}): {body}");
         }
 
         var json = JsonNode.Parse(body)?.AsObject();
@@ -856,11 +871,18 @@ sys.exit(1)
 
     private async Task<string?> FetchCsrfTokenAsync(HttpClient apiClient)
     {
-        var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, "/api/v1/security/csrf_token/", null, timeoutSeconds: 45);
-        if ((int)status >= 200 && (int)status < 300 && !string.IsNullOrWhiteSpace(body))
+        try
         {
-            var json = JsonNode.Parse(body)?.AsObject();
-            return json?["result"]?.GetValue<string>();
+            var (status, body) = await SendJsonRawAsync(apiClient, HttpMethod.Get, "/api/v1/security/csrf_token/", null, timeoutSeconds: 15, maxRetries: 0);
+            if ((int)status >= 200 && (int)status < 300 && !string.IsNullOrWhiteSpace(body))
+            {
+                var json = JsonNode.Parse(body)?.AsObject();
+                return json?["result"]?.GetValue<string>();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendSetupLog($"[INF] Endpoint CSRF opcional ignorado (WTF_CSRF_ENABLED=False): {ex.Message}");
         }
         return null;
     }
@@ -2250,7 +2272,7 @@ sys.exit(1)
     {
         string baseUrl = _supersetUrl.TrimEnd('/');
         string[] candidateUrls = baseUrl.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
-            ? [baseUrl, baseUrl.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
+            ? [baseUrl.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase), baseUrl]
             : [baseUrl];
 
         foreach (string url in candidateUrls)

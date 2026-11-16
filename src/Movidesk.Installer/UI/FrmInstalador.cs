@@ -764,7 +764,7 @@ public sealed class FrmInstalador : Form
         _btnAbrirSuperset = CriarBotaoSecundario("Superset (:8088)", width: 124);
         _btnAbrirSuperset.Enabled = false;
         _btnAbrirSuperset.Margin = new Padding(0, 4, 0, 0);
-        _btnAbrirSuperset.Click += (_, _) => AbrirCaminhoSeguro("http://localhost:8088/superset/dashboard/dashboard-movidesk/");
+        _btnAbrirSuperset.Click += (_, _) => AbrirCaminhoSeguro("http://127.0.0.1:8088/superset/dashboard/dashboard-movidesk/");
 
         leftButtons.Controls.Add(_btnAbrirLog);
         leftButtons.Controls.Add(_btnCopiarLog);

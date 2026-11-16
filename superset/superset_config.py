@@ -1,7 +1,7 @@
 # Configurações do Apache Superset para o Projeto Movidesk
 import os
 
-SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "movidesk_superset_super_secret_key_2026")
+SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY") or "movidesk_superset_super_secret_key_2026"
 
 ROW_LIMIT = 50000
 SUPERSET_WEBSERVER_PORT = 8088
@@ -10,6 +10,8 @@ SUPERSET_WEBSERVER_TIMEOUT = 120
 # Compatibilidade com proxy reverso / acesso HTTP interno ou túnel
 ENABLE_PROXY_FIX = True
 TALISMAN_ENABLED = False
+WTF_CSRF_ENABLED = False
+CONTENT_SECURITY_POLICY_WARNING = False
 
 # Fuso Horário de Brasília
 BABEL_DEFAULT_LOCALE = "pt_BR"

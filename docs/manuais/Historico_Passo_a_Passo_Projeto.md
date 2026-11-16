@@ -230,3 +230,23 @@ Esta fase eliminou os conflitos de porta 8088 e o isolamento de rede entre cont�
 4. **Validação Completa de REST API (90s) na Etapa 4 & Diagnóstico Explícito:**
    - Após o restart do contêiner ao final da Etapa 3 (instalação do driver ODBC 18 e `pymssql`), o método [`AguardarSupersetApiProntaAsync`](../../src/Movidesk.Installer/Core/WslEngine.cs) aguarda até 90 segundos validando `/health`, `POST /api/v1/security/login` e `GET /api/v1/security/csrf_token/` (com JWT + cookies e fallback IPv4 `127.0.0.1`) antes de disparar o provisionamento, além de sincronizar a senha admin via `superset fab reset-password` quando o usuário já existir.
    - Logs detalhados de erros HTTP (`stderr` + resumo de erro do `WslEngine`) foram adicionados à criação de Datasets e Gráficos no `SupersetService.cs` e em `setup_superset_auto.py` para diagnóstico imediato.
+
+---
+
+### Fase 10 — Saneamento Definitivo de Infraestrutura WSL 2 + Apache Superset 6.1.0 (15/11/2026)
+
+Após diagnóstico em ambiente real Windows + WSL 2 onde a Etapa 4 excedia 90 segundos aguardando `/health + login + csrf_token`, foram aplicadas 5 correções estruturais no [`InstaladorManager.cs`](../../src/Movidesk.Installer/Core/InstaladorManager.cs), [`WslEngine.cs`](../../src/Movidesk.Installer/Core/WslEngine.cs), [`SupersetService.cs`](../../src/Movidesk.ControlPanel/Services/SupersetService.cs), [`docker-compose.yml`](../../src/Movidesk.Installer/Resources/docker-compose.yml) e [`superset_config.py`](../../superset/superset_config.py):
+
+1. **Reversão de `network_mode: "host"` para Port Mapping IPv4 Explícito & `127.0.0.1`:**
+   - Em WSL 2 com Docker Engine nativo, `network_mode: "host"` impedia o encaminhamento transparente da porta `8088` para o host Windows; o [`docker-compose.yml`](../../src/Movidesk.Installer/Resources/docker-compose.yml) voltou a declarar `ports: - "0.0.0.0:8088:8088"` com `extra_hosts: - "host.docker.internal:host-gateway"`.
+   - Adicionada limpeza preventiva de processos nativos órfãos (`pkill -f '[s]uperset' || true`) antes de subir o contêiner e padronização de todas as chamadas `HttpClient` C# em **`http://127.0.0.1:8088`** (evitando timeouts em IPv6 `[::1]:8088` no .NET 8).
+2. **`SUPERSET_SECRET_KEY` Fixa & Desativação Segura de CSRF/Talisman:**
+   - Eliminada a geração aleatória por instalação em `.env` (que invalidava volumes persistentes `advice_movidesk_superset_home` pré-existentes), gravando sempre `SUPERSET_SECRET_KEY=movidesk_superset_super_secret_key_2026`.
+   - Definidos `TALISMAN_ENABLED = False`, `WTF_CSRF_ENABLED = False` e `CONTENT_SECURITY_POLICY_WARNING = False` em [`superset_config.py`](../../superset/superset_config.py); tanto [`AguardarSupersetApiProntaAsync`](../../src/Movidesk.Installer/Core/WslEngine.cs) quanto [`FetchCsrfTokenAsync`](../../src/Movidesk.ControlPanel/Services/SupersetService.cs) consideram a API 100% pronta após `GET /health` HTTP 200 e obtenção de `access_token` em `POST /api/v1/security/login` sem depender de cookie `/csrf_token/`.
+3. **Sincronização Forçada de Senha Admin na Etapa 3:**
+   - Execução incondicional de `superset fab reset-password` imediatamente após `superset fab create-admin` (com redirecionamento `< /dev/null`), prevenindo `HTTP 401` em volumes reutilizados.
+4. **Inversão da Ordem na Etapa 3 (Drivers antes de DB/Init, sem Restart Final):**
+   - **Passo A:** `docker compose up -d` | **Passo B:** instalação de `msodbcsql18`, `pyodbc` e `pymssql` | **Passo C:** `docker restart advice_movidesk_superset` para carregar drivers | **Passo D:** `superset db upgrade`, `create-admin`, `reset-password` e `superset init` enquanto o Gunicorn conclui o boot de forma limpa (sem novo restart às vésperas da Etapa 4).
+5. **Log Explícito de Cada Tentativa na Etapa 4 & Deploy Direto de Dentro do Contêiner:**
+   - [`AguardarSupersetApiProntaAsync`](../../src/Movidesk.Installer/Core/WslEngine.cs) passou a registrar no log o status HTTP ou exceção real de cada tentativa (`Tentativa N: /health=..., /login=...`).
+   - O deploy do script [`setup_superset_auto.py`](../../superset/setup_superset_auto.py) na Etapa 4 é executado via `docker exec -i advice_movidesk_superset "$PY_BIN" - --url "http://127.0.0.1:8088" ... < setup_superset_auto.py`, comunicando-se internamente via loopback do contêiner e apontando para o IP Windows validado na porta `1433`.

@@ -186,7 +186,7 @@ public sealed class ExtratorArquivos
         supersetObj["ContainerName"] = config.NomeConteinerSuperset;
         supersetObj["ComposePath"] = config.WslPastaSuperset;
         supersetObj["Port"] = 8088;
-        supersetObj["Url"] = "http://localhost:8088";
+        supersetObj["Url"] = "http://127.0.0.1:8088";
         supersetObj["SecretKey"] ??= "movidesk_superset_super_secret_key_2026";
         rootObj["Superset"] = supersetObj;
 

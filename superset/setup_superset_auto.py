@@ -4,7 +4,7 @@
 ===============================================================================
  Automação Oficial Apache Superset — Movidesk BI (Advice Compliance Solutions)
 ===============================================================================
-Executa silenciosamente via REST API do Apache Superset (http://localhost:8088):
+Executa silenciosamente via REST API do Apache Superset (http://127.0.0.1:8088):
   1. Cria/atualiza a conexão de banco de dados MSSQL `MovideskDM`
      (mssql+pymssql://sa:123456@172.29.112.1:1433/MovideskDM).
   2. Registra e sincroniza os 9 Datasets oficiais do schema `mart`:
@@ -41,7 +41,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 
-DEFAULT_SUPERSET_URL = os.environ.get("SUPERSET_URL", "http://localhost:8088")
+DEFAULT_SUPERSET_URL = os.environ.get("SUPERSET_URL", "http://127.0.0.1:8088")
 DEFAULT_USERNAME = os.environ.get("SUPERSET_USER", "admin")
 DEFAULT_PASSWORD = os.environ.get("SUPERSET_PASSWORD", "admin")
 DEFAULT_DB_NAME = "MovideskDM"
@@ -189,6 +189,7 @@ class SupersetApiClient:
                             self.password,
                         ],
                         env=env,
+                        stdin=subprocess.DEVNULL,
                         capture_output=True,
                         text=True,
                         check=False,
@@ -309,7 +310,7 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
                 cur.execute("SELECT 1")
                 cur.fetchone()
                 conn.close()
-                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user)}:{urllib.parse.quote(password)}@{candidate}:{port}/{urllib.parse.quote(database)}"
+                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}@{candidate}:{port}/{urllib.parse.quote(database, safe='')}"
                 print(f"[OK] Conexão com SQL Server validada via pymssql em {candidate}:{port}.", flush=True)
                 return updated_uri
             except Exception:
@@ -321,7 +322,7 @@ def resolve_best_db_uri(preferred_uri: str) -> str:
     for candidate in candidate_hosts:
         try:
             with socket.create_connection((candidate, port), timeout=2.0):
-                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user)}:{urllib.parse.quote(password)}@{candidate}:{port}/{urllib.parse.quote(database)}"
+                updated_uri = f"mssql+pymssql://{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}@{candidate}:{port}/{urllib.parse.quote(database, safe='')}"
                 print(f"[OK] Conectividade TCP com SQL Server confirmada em {candidate}:{port}.", flush=True)
                 return updated_uri
         except Exception:
@@ -2263,7 +2264,7 @@ def main() -> int:
         pass
 
     parser = argparse.ArgumentParser(description="Setup automático do Apache Superset (MovideskDM)")
-    parser.add_argument("--url", default=DEFAULT_SUPERSET_URL, help="URL do Superset (padrão: http://localhost:8088)")
+    parser.add_argument("--url", default=DEFAULT_SUPERSET_URL, help="URL do Superset (padrão: http://127.0.0.1:8088)")
     parser.add_argument("--username", default=DEFAULT_USERNAME, help="Usuário admin do Superset")
     parser.add_argument("-p", "--password", default=DEFAULT_PASSWORD, help="Senha admin do Superset")
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME, help="Nome do banco no Superset")

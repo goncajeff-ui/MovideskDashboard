@@ -58,8 +58,8 @@ public sealed class ResultadoInstalacao
     public string DiretorioInstalacao { get; init; } = string.Empty;
     public string CaminhoExecutavelPainel { get; init; } = string.Empty;
     public string CaminhoAtalhoDesktop { get; init; } = string.Empty;
-    public string UrlSuperset { get; init; } = "http://localhost:8088";
-    public string UrlDashboard { get; init; } = "http://localhost:8088/superset/dashboard/dashboard-movidesk/";
+    public string UrlSuperset { get; init; } = "http://127.0.0.1:8088";
+    public string UrlDashboard { get; init; } = "http://127.0.0.1:8088/superset/dashboard/dashboard-movidesk/";
     public string CaminhoArquivoLog { get; init; } = string.Empty;
     public string? MensagemResumo { get; init; }
 }

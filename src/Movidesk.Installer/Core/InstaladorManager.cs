@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -92,8 +91,8 @@ public sealed class InstaladorManager
             await ExecutarEtapaAsync(3, progresso, log, async () =>
             {
                 await ExecutarStepDownloadSupersetAsync(config, log, ct);
-                await ExecutarStepConfiguracaoInternaAsync(config, log, ct);
                 await ExecutarStepDriverOdbcAsync(config, log, ct);
+                await ExecutarStepConfiguracaoInternaAsync(config, log, ct);
             }, ct);
 
             // ETAPA 4/4 — Deploy Final do Dashboard Movidesk BI
@@ -199,7 +198,6 @@ public sealed class InstaladorManager
     {
         string dockerComposeYml = _extrator.ObterRecursoTextoUtf8Lf("docker-compose.yml");
         string supersetConfigPy = _extrator.ObterRecursoTextoUtf8Lf("superset_config.py");
-        string secretGerada = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
 
         log.Aguardando($"Enviando arquivos de configuração seguros para '{config.WslPastaSuperset}' no WSL ({config.WslDistro})...");
         await _wslEngine.CopiarTextoParaWslAsync(
@@ -231,20 +229,15 @@ public sealed class InstaladorManager
 
             mkdir -p '{{pastaSuperset}}'
             chmod 755 '{{pastaSuperset}}'
-            if [ ! -s '{{pastaSuperset}}/.env' ] || ! grep -q '^SUPERSET_SECRET_KEY=' '{{pastaSuperset}}/.env'; then
-                printf 'SUPERSET_SECRET_KEY={{secretGerada}}\nTZ=America/Sao_Paulo\n' > '{{pastaSuperset}}/.env'
-                chmod 600 '{{pastaSuperset}}/.env'
-                echo "[OK] Arquivo .env criado com chave criptográfica exclusiva (chmod 600)."
-            else
-                chmod 600 '{{pastaSuperset}}/.env'
-                echo "[OK] Mantendo SUPERSET_SECRET_KEY existente no .env."
-            fi
+            printf 'SUPERSET_SECRET_KEY=movidesk_superset_super_secret_key_2026\nTZ=America/Sao_Paulo\n' > '{{pastaSuperset}}/.env'
+            chmod 600 '{{pastaSuperset}}/.env'
+            echo "[OK] Arquivo .env atualizado com SUPERSET_SECRET_KEY fixa e TZ=America/Sao_Paulo (chmod 600)."
 
             garantir_daemon_docker
 
-            # Limpa execução anterior para instalação idempotente e libera porta 8088 de instância legada
+            # Limpa execução anterior para instalação idempotente e libera porta 8088 de instância nativa órfã
             docker rm -f '{{containerName}}' >/dev/null 2>&1 || true
-            pkill -f '[s]uperset run' >/dev/null 2>&1 || true
+            pkill -f '[s]uperset' >/dev/null 2>&1 || true
 
             if docker image inspect apache/superset:6.1.0 >/dev/null 2>&1; then
                 echo "[OK] Imagem apache/superset:6.1.0 já disponível no cache local do Docker."
@@ -340,7 +333,7 @@ public sealed class InstaladorManager
         if (portaOcupada)
         {
             bool ehSupersetJaAtivo = await _wslEngine.AguardarHealthHttpAsync(
-                "http://localhost:8088/health",
+                "http://127.0.0.1:8088/health",
                 TimeSpan.FromSeconds(2),
                 log,
                 ct);
@@ -402,107 +395,21 @@ public sealed class InstaladorManager
         log.Sucesso("Contêiner Apache Superset 6.1.0 baixado e inicializado na porta 8088.");
     }
 
-    private async Task ExecutarStepConfiguracaoInternaAsync(
-        ConfiguracaoInstalacao config,
-        AuditorLog log,
-        CancellationToken ct)
-    {
-        string c = EscaparArgBashSimples(config.NomeConteinerSuperset);
-        string user = EscaparArgBashSimples(config.SupersetUsuarioAdmin);
-        string pass = EscaparArgBashSimples(config.SupersetSenhaAdmin);
-        string email = EscaparArgBashSimples(config.SupersetEmailAdmin);
-
-        string scriptInit = $$"""
-            set -e
-
-            {{WslEngine.ScriptIsolamentoDockerBash}}
-
-            echo "[INF] Aguardando contêiner '{{c}}' estabilizar..."
-            READY_OK=0
-            for i in $(seq 1 15); do
-                if [ -n "$(docker ps -q --filter 'name=^{{c}}$' --filter 'status=running' 2>/dev/null || true)" ]; then
-                    READY_OK=1
-                    break
-                fi
-                sleep 2
-            done
-
-            if [ "$READY_OK" -ne 1 ]; then
-                echo "[ERRO] O contêiner '{{c}}' não está em execução." >&2
-                docker logs --tail 25 '{{c}}' >&2 || true
-                exit 1
-            fi
-
-            echo "[INF] Garantindo permissões em /app/superset_home..."
-            docker exec -u 0 '{{c}}' bash -c 'mkdir -p /app/superset_home && chown -R superset:superset /app/superset_home'
-
-            echo "[INF] Atualizando metadados internos (superset db upgrade)..."
-            docker exec '{{c}}' superset db upgrade
-
-            echo "[INF] Garantindo usuário administrador '{{user}}' e credenciais..."
-            ADMIN_OUT=$(docker exec '{{c}}' superset fab create-admin \
-                --username '{{user}}' \
-                --firstname 'Admin' \
-                --lastname 'Advice' \
-                --email '{{email}}' \
-                --password '{{pass}}' 2>&1) || true
-            echo "$ADMIN_OUT"
-            if echo "$ADMIN_OUT" | grep -qiE 'already exists|error|failed'; then
-                echo "[INF] Sincronizando senha do usuário administrador '{{user}}' (reset-password)..."
-                docker exec '{{c}}' superset fab reset-password \
-                    --username '{{user}}' \
-                    --password '{{pass}}' || true
-            fi
-
-            echo "[INF] Sincronizando permissões e roles padrão (superset init)..."
-            docker exec '{{c}}' superset init
-            """;
-
-        ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(
-            config.WslDistro,
-            scriptInit,
-            comoRoot: true,
-            log: log,
-            registrarLinhasNoLog: true,
-            timeout: TimeSpan.FromMinutes(10),
-            ct: ct);
-
-        if (!res.Sucesso)
-        {
-            throw new InvalidOperationException(
-                $"Falha na inicialização interna do Superset via docker exec (código {res.ExitCode}).\n{WslEngine.FormatarResumoErro(res)}");
-        }
-
-        log.Aguardando("Validando resposta HTTP do servidor web Apache Superset (porta 8088)...");
-        bool online = await _wslEngine.AguardarHealthHttpAsync(
-            "http://localhost:8088/health",
-            TimeSpan.FromSeconds(75),
-            log,
-            ct);
-
-        if (!online)
-        {
-            log.Aviso("Endpoint /health demorou a responder no primeiro boot; seguindo com a instalação do driver ODBC.");
-        }
-    }
-
     private async Task ExecutarStepDriverOdbcAsync(
         ConfiguracaoInstalacao config,
         AuditorLog log,
         CancellationToken ct)
     {
-        string pastaSuperset = EscaparArgBashSimples(config.WslPastaSuperset);
         string containerName = EscaparArgBashSimples(config.NomeConteinerSuperset);
 
         string scriptOdbc = $$"""
             set -e
 
             {{WslEngine.ScriptIsolamentoDockerBash}}
-            {{WslEngine.HelperComposeBash}}
 
             CONTAINER='{{containerName}}'
 
-            echo "[INF] Instalando Microsoft ODBC Driver 18 (msodbcsql18) no contêiner $CONTAINER..."
+            echo "[INF] Instalando Microsoft ODBC Driver 18 (msodbcsql18) e pymssql/pyodbc no contêiner $CONTAINER (Passo B)..."
             docker exec -i -u 0 "$CONTAINER" bash -e -o pipefail <<'EOF_ODBC'
                 export DEBIAN_FRONTEND=noninteractive
                 export PATH="/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -583,9 +490,24 @@ public sealed class InstaladorManager
                 rm -rf /tmp/uv-cache /var/lib/apt/lists/* || true
             EOF_ODBC
 
-            echo "[INF] Reiniciando contêiner do Superset para efetivar drivers..."
-            cd '{{pastaSuperset}}'
-            compose_cmd restart
+            echo "[INF] Reiniciando contêiner '$CONTAINER' para carregar os novos drivers (Passo C)..."
+            docker restart "$CONTAINER"
+
+            READY_OK=0
+            for i in $(seq 1 15); do
+                if [ -n "$(docker ps -q --filter "name=^${CONTAINER}$" --filter "status=running" 2>/dev/null || true)" ]; then
+                    READY_OK=1
+                    break
+                fi
+                sleep 1
+            done
+
+            if [ "$READY_OK" -ne 1 ]; then
+                echo "[ERRO] O contêiner '$CONTAINER' não retornou ao estado running após docker restart." >&2
+                docker logs --tail 25 "$CONTAINER" >&2 || true
+                exit 1
+            fi
+            echo "[OK] Contêiner '$CONTAINER' reiniciado com os drivers ODBC 18 e pymssql carregados."
             """;
 
         ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(
@@ -602,18 +524,78 @@ public sealed class InstaladorManager
             throw new InvalidOperationException(
                 $"Falha ao instalar o driver msodbcsql18 / conectores SQL Server no contêiner (código {res.ExitCode}).\n{WslEngine.FormatarResumoErro(res)}");
         }
+    }
 
-        log.Aguardando("Aguardando Apache Superset retornar online após instalação do driver ODBC 18...");
-        bool voltouOnline = await _wslEngine.AguardarHealthHttpAsync(
-            "http://localhost:8088/health",
-            TimeSpan.FromSeconds(90),
-            log,
-            ct);
+    private async Task ExecutarStepConfiguracaoInternaAsync(
+        ConfiguracaoInstalacao config,
+        AuditorLog log,
+        CancellationToken ct)
+    {
+        string c = EscaparArgBashSimples(config.NomeConteinerSuperset);
+        string user = EscaparArgBashSimples(config.SupersetUsuarioAdmin);
+        string pass = EscaparArgBashSimples(config.SupersetSenhaAdmin);
+        string email = EscaparArgBashSimples(config.SupersetEmailAdmin);
 
-        if (!voltouOnline)
+        string scriptInit = $$"""
+            set -e
+
+            {{WslEngine.ScriptIsolamentoDockerBash}}
+
+            echo "[INF] Aguardando contêiner '{{c}}' ficar pronto para inicialização interna (Passo D)..."
+            READY_OK=0
+            for i in $(seq 1 15); do
+                if [ -n "$(docker ps -q --filter 'name=^{{c}}$' --filter 'status=running' 2>/dev/null || true)" ] && docker exec '{{c}}' true >/dev/null 2>&1 < /dev/null; then
+                    READY_OK=1
+                    break
+                fi
+                sleep 2
+            done
+
+            if [ "$READY_OK" -ne 1 ]; then
+                echo "[ERRO] O contêiner '{{c}}' não está em execução." >&2
+                docker logs --tail 25 '{{c}}' >&2 || true
+                exit 1
+            fi
+
+            echo "[INF] Garantindo permissões em /app/superset_home..."
+            docker exec -u 0 '{{c}}' bash -c 'mkdir -p /app/superset_home && chown -R superset:superset /app/superset_home' < /dev/null
+
+            echo "[INF] Atualizando metadados internos (superset db upgrade)..."
+            docker exec '{{c}}' superset db upgrade < /dev/null
+
+            echo "[INF] Garantindo usuário administrador '{{user}}'..."
+            docker exec '{{c}}' superset fab create-admin \
+                --username '{{user}}' \
+                --firstname 'Admin' \
+                --lastname 'Advice' \
+                --email '{{email}}' \
+                --password '{{pass}}' < /dev/null || true
+
+            echo "[INF] Forçando sincronização da senha do administrador '{{user}}' (superset fab reset-password)..."
+            docker exec '{{c}}' superset fab reset-password \
+                --username '{{user}}' \
+                --password '{{pass}}' < /dev/null
+
+            echo "[INF] Sincronizando permissões e roles padrão (superset init)..."
+            docker exec '{{c}}' superset init < /dev/null
+            """;
+
+        ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(
+            config.WslDistro,
+            scriptInit,
+            comoRoot: true,
+            log: log,
+            registrarLinhasNoLog: true,
+            timeout: TimeSpan.FromMinutes(10),
+            ct: ct);
+
+        if (!res.Sucesso)
         {
-            throw new TimeoutException("O Apache Superset não respondeu em http://localhost:8088/health após reiniciar com o driver ODBC.");
+            throw new InvalidOperationException(
+                $"Falha na inicialização interna do Superset via docker exec (código {res.ExitCode}).\n{WslEngine.FormatarResumoErro(res)}");
         }
+
+        log.Sucesso("Metadados internos, senha admin e permissões do Apache Superset sincronizados.");
     }
 
     private async Task<bool> ExecutarStepDeployDashboardAsync(
@@ -634,9 +616,9 @@ public sealed class InstaladorManager
                 await _wslEngine.GarantirRegrasFirewallAsync(log, ct);
             }
 
-            log.Aguardando("Validando estabilização do Apache Superset e REST API (/health + login + csrf_token, até 90s)...");
+            log.Aguardando("Validando estabilização do Apache Superset e REST API (http://127.0.0.1:8088 /health + login, até 90s)...");
             bool supersetOnline = await _wslEngine.AguardarSupersetApiProntaAsync(
-                "http://localhost:8088",
+                "http://127.0.0.1:8088",
                 config.SupersetUsuarioAdmin,
                 config.SupersetSenhaAdmin,
                 TimeSpan.FromSeconds(90),
@@ -646,7 +628,7 @@ public sealed class InstaladorManager
             if (!supersetOnline)
             {
                 throw new TimeoutException(
-                    "O Apache Superset não ficou pronto na REST API (http://localhost:8088 /health + login + csrf_token) após 90s antes do deploy do Dashboard.");
+                    "O Apache Superset não ficou pronto na REST API (http://127.0.0.1:8088 /health + login) após 90s antes do deploy do Dashboard.");
             }
 
             string setupScriptPy = _extrator.ObterRecursoTextoUtf8Lf("setup_superset_auto.py");
@@ -740,7 +722,7 @@ public sealed class InstaladorManager
                 ROUTE_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
                 NS_IP=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
 
-                PY_BIN=$(docker exec '{{containerName}}' sh -c 'if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi')
+                PY_BIN=$(docker exec '{{containerName}}' sh -c 'for py in /app/.venv/bin/python "$(command -v python3 2>/dev/null || true)"; do if [ -n "$py" ] && [ -x "$py" ] && "$py" -c "import pymssql" >/dev/null 2>&1; then echo "$py"; exit 0; fi; done; if [ -x /app/.venv/bin/python ]; then echo /app/.venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; fi' < /dev/null)
                 if [ -z "$PY_BIN" ]; then
                     echo "[ERRO] Interpretador Python não encontrado dentro do contêiner '{{containerName}}'." >&2
                     exit 1
@@ -751,7 +733,7 @@ public sealed class InstaladorManager
                 PROBE_OUT=$(docker exec '{{containerName}}' "$PY_BIN" -c "import base64; exec(base64.b64decode('{{pyCodeB64}}').decode('utf-8'))" \
                     "{{cfgJsonB64}}" \
                     "$ROUTE_IP" \
-                    "$NS_IP" 2>&1 || true)
+                    "$NS_IP" < /dev/null 2>&1 || true)
 
                 TARGET_HOST=$(echo "$PROBE_OUT" | awk -F'\\[OK_SQL_HOST\\]' '/\\[OK_SQL_HOST\\]/ {print $2; exit}')
 
@@ -769,13 +751,13 @@ public sealed class InstaladorManager
 
                 DB_URI="mssql+pymssql://{{sqlUser}}:{{sqlPass}}@${TARGET_HOST}:${SQL_PORT}/{{sqlDb}}"
 
-                docker cp '{{EscaparArgBashSimples(scriptPathWsl)}}' '{{containerName}}:/tmp/setup_superset_auto.py'
-                docker exec '{{containerName}}' "$PY_BIN" /tmp/setup_superset_auto.py \
+                echo "[INF] Executando deploy do Dashboard Movidesk BI diretamente de dentro do contêiner '{{containerName}}' (http://127.0.0.1:8088)..."
+                docker exec -i '{{containerName}}' "$PY_BIN" - \
                     --url "http://127.0.0.1:8088" \
                     --username '{{userSuperset}}' \
                     --password '{{passSuperset}}' \
                     --db-name "MovideskDM" \
-                    --db-uri "$DB_URI"
+                    --db-uri "$DB_URI" < '{{EscaparArgBashSimples(scriptPathWsl)}}'
                 """;
 
             ResultadoComando res = await _wslEngine.ExecutarBashWslAsync(

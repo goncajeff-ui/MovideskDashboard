@@ -4,7 +4,10 @@ services:
     container_name: advice_movidesk_superset
     restart: unless-stopped
     init: true
-    network_mode: "host"
+    ports:
+      - "0.0.0.0:8088:8088"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       SUPERSET_SECRET_KEY: "${SUPERSET_SECRET_KEY:-movidesk_superset_super_secret_key_2026}"
       SUPERSET_CONFIG_PATH: "/app/pythonpath/superset_config.py"

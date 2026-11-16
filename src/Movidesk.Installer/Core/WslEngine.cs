@@ -731,34 +731,28 @@ public sealed class WslEngine
         AuditorLog log,
         CancellationToken ct)
     {
-        string normalized = urlHealth.Trim();
-        string[] candidateUrls = normalized.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
-            ? [normalized, normalized.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
-            : [normalized];
+        string targetUrl = urlHealth.Trim().Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase);
 
         DateTime limite = DateTime.UtcNow.Add(tempoMaximo);
         while (DateTime.UtcNow < limite)
         {
             ct.ThrowIfCancellationRequested();
-            foreach (string url in candidateUrls)
+            try
             {
-                try
+                using HttpResponseMessage resp = await HttpProbeClient.GetAsync(targetUrl, ct);
+                if (resp.IsSuccessStatusCode)
                 {
-                    using HttpResponseMessage resp = await HttpProbeClient.GetAsync(url, ct);
-                    if (resp.IsSuccessStatusCode)
-                    {
-                        log.Sucesso($"Apache Superset respondendo HTTP {(int)resp.StatusCode} em {url}");
-                        return true;
-                    }
+                    log.Sucesso($"Apache Superset respondendo HTTP {(int)resp.StatusCode} em {targetUrl}");
+                    return true;
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch
-                {
-                    // Continua aguardando subida do gunicorn/flask no contêiner
-                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // Continua aguardando subida do gunicorn/flask no contêiner
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
@@ -768,9 +762,9 @@ public sealed class WslEngine
     }
 
     /// <summary>
-    /// Valida diretamente pelo host Windows (via HttpClient com CookieContainer) se o Apache Superset
-    /// está respondendo /health, aceitando login JWT em /api/v1/security/login e emitindo CSRF token
-    /// em /api/v1/security/csrf_token/ antes de disparar o provisionamento do Dashboard na Etapa 4.
+    /// Valida via http://127.0.0.1:8088 se o Apache Superset responde HTTP 200 em /health
+    /// e emite access_token em POST /api/v1/security/login (sem exigir csrf_token quando WTF_CSRF_ENABLED=False),
+    /// registrando o status HTTP ou erro real de cada tentativa no log.
     /// </summary>
     public async Task<bool> AguardarSupersetApiProntaAsync(
         string baseUrl,
@@ -780,20 +774,12 @@ public sealed class WslEngine
         AuditorLog log,
         CancellationToken ct)
     {
-        string trimmed = baseUrl.Trim().TrimEnd('/');
-        string[] candidateBases = trimmed.Contains("://localhost", StringComparison.OrdinalIgnoreCase)
-            ? [trimmed, trimmed.Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase)]
-            : [trimmed];
+        string targetBase = baseUrl.Trim().TrimEnd('/')
+            .Replace("://localhost", "://127.0.0.1", StringComparison.OrdinalIgnoreCase);
 
-        var cookieContainer = new CookieContainer();
-        using var handler = new HttpClientHandler
+        using var apiClient = new HttpClient
         {
-            UseCookies = true,
-            CookieContainer = cookieContainer
-        };
-        using var apiClient = new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(10)
+            Timeout = TimeSpan.FromSeconds(8)
         };
         apiClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -807,85 +793,103 @@ public sealed class WslEngine
 
         DateTime limite = DateTime.UtcNow.Add(tempoMaximo);
         int tentativa = 0;
+        string ultimoDiagnostico = "nenhuma tentativa concluída";
+
+        static string ResumirTexto(string? texto, int maxLen = 160)
+        {
+            if (string.IsNullOrWhiteSpace(texto)) return string.Empty;
+            string single = texto.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            return single.Length > maxLen ? single[..maxLen] + "..." : single;
+        }
 
         while (DateTime.UtcNow < limite)
         {
             ct.ThrowIfCancellationRequested();
             tentativa++;
 
-            foreach (string candidate in candidateBases)
+            try
             {
-                try
-                {
-                    using var healthResp = await apiClient.GetAsync($"{candidate}/health", ct);
-                    if (!healthResp.IsSuccessStatusCode)
-                    {
-                        continue;
-                    }
+                using var healthResp = await apiClient.GetAsync($"{targetBase}/health", ct);
+                int healthCode = (int)healthResp.StatusCode;
 
-                    using var loginReq = new HttpRequestMessage(HttpMethod.Post, $"{candidate}/api/v1/security/login")
+                if (!healthResp.IsSuccessStatusCode)
+                {
+                    string hBody = ResumirTexto(await healthResp.Content.ReadAsStringAsync(ct), 100);
+                    ultimoDiagnostico = $"/health={healthCode}" + (string.IsNullOrEmpty(hBody) ? string.Empty : $" ({hBody})");
+                    log.Info($"Tentativa {tentativa}: {ultimoDiagnostico}");
+                }
+                else
+                {
+                    using var loginReq = new HttpRequestMessage(HttpMethod.Post, $"{targetBase}/api/v1/security/login")
                     {
                         Content = new StringContent(loginPayloadJson, Encoding.UTF8, "application/json")
                     };
                     using var loginResp = await apiClient.SendAsync(loginReq, ct);
-
-                    if (loginResp.StatusCode == HttpStatusCode.Unauthorized)
-                    {
-                        log.Aviso($"REST API do Apache Superset ativa em {candidate} (login retornou HTTP 401; prosseguindo para sincronização de credenciais).");
-                        return true;
-                    }
-
-                    if (!loginResp.IsSuccessStatusCode)
-                    {
-                        continue;
-                    }
-
+                    int loginCode = (int)loginResp.StatusCode;
                     string loginBody = await loginResp.Content.ReadAsStringAsync(ct);
-                    string? accessToken = null;
-                    if (!string.IsNullOrWhiteSpace(loginBody))
+
+                    if (loginResp.IsSuccessStatusCode)
                     {
-                        using var doc = JsonDocument.Parse(loginBody);
-                        if (doc.RootElement.TryGetProperty("access_token", out JsonElement tokEl) &&
-                            tokEl.ValueKind == JsonValueKind.String)
+                        string? accessToken = null;
+                        if (!string.IsNullOrWhiteSpace(loginBody))
                         {
-                            accessToken = tokEl.GetString();
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(loginBody);
+                                if (doc.RootElement.TryGetProperty("access_token", out JsonElement tokEl) &&
+                                    tokEl.ValueKind == JsonValueKind.String)
+                                {
+                                    accessToken = tokEl.GetString();
+                                }
+                            }
+                            catch (Exception jsonEx)
+                            {
+                                ultimoDiagnostico = $"/health={healthCode}, /login={loginCode} (JSON inválido: {jsonEx.Message})";
+                                log.Aviso($"Tentativa {tentativa}: {ultimoDiagnostico}");
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(accessToken))
+                        {
+                            log.Sucesso($"Tentativa {tentativa}: /health={healthCode}, /login={loginCode} (access_token OK). REST API 100% pronta em {targetBase}!");
+                            return true;
+                        }
+
+                        if (!ultimoDiagnostico.Contains("JSON inválido", StringComparison.Ordinal))
+                        {
+                            ultimoDiagnostico = $"/health={healthCode}, /login={loginCode} sem access_token ({ResumirTexto(loginBody)})";
+                            log.Aviso($"Tentativa {tentativa}: {ultimoDiagnostico}");
                         }
                     }
-
-                    if (string.IsNullOrWhiteSpace(accessToken))
+                    else
                     {
-                        continue;
+                        string errPreview = ResumirTexto(loginBody);
+                        ultimoDiagnostico = $"/health={healthCode}, /login={loginCode}" +
+                            (string.IsNullOrEmpty(errPreview) ? string.Empty : $" ({errPreview})");
+                        log.Info($"Tentativa {tentativa}: {ultimoDiagnostico}");
                     }
-
-                    using var csrfReq = new HttpRequestMessage(HttpMethod.Get, $"{candidate}/api/v1/security/csrf_token/");
-                    csrfReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-                    csrfReq.Headers.Referrer = new Uri($"{candidate}/");
-                    using var csrfResp = await apiClient.SendAsync(csrfReq, ct);
-
-                    if (csrfResp.IsSuccessStatusCode)
-                    {
-                        log.Sucesso($"Apache Superset pronto e REST API validada (/health + login JWT + CSRF HTTP {(int)csrfResp.StatusCode}) em {candidate}");
-                        return true;
-                    }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch
-                {
-                    // Gunicorn/Flask ainda iniciando workers após restart; aguarda próximo ciclo
                 }
             }
-
-            if (tentativa == 1 || tentativa % 5 == 0)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                log.Aguardando($"Aguardando workers REST API/CSRF do Apache Superset estabilizarem (tentativa {tentativa})...");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                string innerMsg = ex.InnerException is not null ? $" | {ex.InnerException.Message}" : string.Empty;
+                ultimoDiagnostico = $"{ex.GetType().Name}: {ex.Message}{innerMsg}";
+                log.Info($"Tentativa {tentativa}: falha ao consultar {targetBase} ({ultimoDiagnostico})");
+            }
+
+            if (DateTime.UtcNow >= limite)
+            {
+                break;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
         }
 
+        log.Erro($"REST API do Apache Superset em {targetBase} não respondeu com access_token após {tentativa} tentativa(s) ({tempoMaximo.TotalSeconds:0}s). Último retorno: {ultimoDiagnostico}");
         return false;
     }
 
