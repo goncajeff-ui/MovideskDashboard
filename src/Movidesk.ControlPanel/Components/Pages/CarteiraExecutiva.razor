@@ -1,0 +1,1503 @@
+@page "/carteira-executiva"
+@using System.Globalization
+@inject CarteiraExecutivaService CarteiraService
+@inject IJSRuntime JS
+
+<PageTitle>Visão Executiva da Carteira (Top 3 por Cliente) — Advice Compliance Solutions</PageTitle>
+
+@{
+    var refDate = GetReferenceDate();
+    var filteredTickets = CarteiraService.ApplyFilters(_sourceTickets, _filter);
+    var analytics = CarteiraService.BuildAnalytics(_sourceTickets, _filter, refDate);
+    var clienteOptions = GetClienteOptions();
+    var servicoOptions = GetServicoOptions();
+    var allSourcePendingCount = _sourceTickets.Count(t => CarteiraExecutivaService.IsPendingStatus(t.Status));
+    var allSourceDoneCount = _sourceTickets.Count(t => CarteiraExecutivaService.IsDoneStatus(t.Status));
+    var allSourceHighCritCount = _sourceTickets.Count(t =>
+        string.Equals(t.Urgencia, "Alta", StringComparison.Ordinal) ||
+        string.Equals(t.Urgencia, "Crítica/Impeditiva", StringComparison.Ordinal));
+}
+
+<div class="exec-wrapper">
+    <!-- =====================================================================
+         1. CABEÇALHO EXECUTIVO CORPORATIVO ADVICE
+         ===================================================================== -->
+    <header class="exec-header">
+        <div class="exec-brand-row">
+            <div class="exec-brand-logo" aria-hidden="true">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#f5c451" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2L3 6.5v5.5c0 5.25 3.85 9.95 9 11 5.15-1.05 9-5.75 9-11V6.5L12 2z" />
+                    <path d="M9 12l2 2 4-4" stroke="#38bdf8" />
+                </svg>
+            </div>
+            <div class="exec-brand-titles">
+                <h1>
+                    <span class="exec-gold-tag">ADVICE COMPLIANCE SOLUTIONS</span> — Inteligência de Sustentação &amp; Saúde da Carteira
+                </h1>
+                <p class="exec-brand-subtitle">@BuildDynamicSubtitle()</p>
+            </div>
+        </div>
+
+        <div class="exec-header-meta">
+            <span class="exec-pill exec-pill-gold">
+                <span class="status-dot" aria-hidden="true"></span>
+                Equipe: @(_useLiveSql && _selectedEquipe != "ALL" ? _selectedEquipe : "Sustentação e-Guardian RJ")
+            </span>
+            <span class="exec-pill exec-pill-cyan">
+                @analytics.TotalClientes @(analytics.TotalClientes == 1 ? "Cliente PJ" : "Clientes PJ") · @analytics.TotalTickets Tickets
+            </span>
+
+            <div class="exec-print-hide" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                <select class="exec-select-compact"
+                        value="@_refMode"
+                        @onchange="OnRefModeChanged"
+                        title="Data de referência para cálculo de Recência e Pendências Envelhecidas">
+                    <option value="snapshot">Corte Planilha (15/11/2026)</option>
+                    <option value="today">Data Atual (@DateTime.Today.ToString("dd/MM/yyyy", CarteiraExecutivaService.PtBr))</option>
+                </select>
+
+                <button type="button"
+                        class="btn exec-btn-gold"
+                        style="padding:7px 12px;font-size:0.81rem;"
+                        @onclick="() => ExportCsvAsync(filteredTickets)"
+                        disabled="@(filteredTickets.Count == 0)">
+                    Exportar CSV
+                </button>
+
+                <button type="button"
+                        class="btn btn-secondary"
+                        style="padding:7px 12px;font-size:0.81rem;"
+                        @onclick="PrintPageAsync">
+                    Imprimir / PDF
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- =====================================================================
+         SELETOR DE FONTE DE DADOS (SNAPSHOT OFICIAL OFFLINE vs MOVIDESKDM)
+         ===================================================================== -->
+    <section class="exec-live-bar exec-print-hide" aria-label="Fonte de Dados">
+        <div class="exec-live-controls">
+            <span style="font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);">Fonte dos Dados:</span>
+            <div class="exec-segmented" role="group" aria-label="Modo de Fonte de Dados">
+                <button type="button"
+                        class="exec-seg-btn @(!_useLiveSql ? "active" : "")"
+                        @onclick="SwitchToSnapshot"
+                        disabled="@_loadingLive">
+                    Snapshot Oficial (59 Tickets · Offline)
+                </button>
+                <button type="button"
+                        class="exec-seg-btn @(_useLiveSql ? "active" : "")"
+                        @onclick="SwitchToLiveSqlAsync"
+                        disabled="@_loadingLive">
+                    @if (_loadingLive)
+                    {
+                        <span>Consultando MovideskDM...</span>
+                    }
+                    else
+                    {
+                        <span>SQL Server MovideskDM (Ao Vivo)</span>
+                    }
+                </button>
+            </div>
+
+            @if (_useLiveSql)
+            {
+                <select class="exec-select-compact" value="@_selectedEquipe" @onchange="OnLiveEquipeChanged" disabled="@_loadingLive">
+                    <option value="ALL">Todas as Equipes</option>
+                    @foreach (var eq in _equipesOptions)
+                    {
+                        <option value="@eq">@eq</option>
+                    }
+                </select>
+
+                <select class="exec-select-compact" value="@_selectedAnalista" @onchange="OnLiveAnalistaChanged" disabled="@_loadingLive">
+                    <option value="ALL">Todos os Analistas</option>
+                    @foreach (var ag in _analistasOptions)
+                    {
+                        <option value="@ag">@ag</option>
+                    }
+                </select>
+
+                <button type="button"
+                        class="btn btn-primary"
+                        style="padding:7px 12px;font-size:0.8rem;"
+                        @onclick="LoadLiveSqlAsync"
+                        disabled="@_loadingLive">
+                    @if (_loadingLive)
+                    {
+                        <span class="spinner spinner-sm" aria-hidden="true"></span>
+                        <span>Consultando...</span>
+                    }
+                    else
+                    {
+                        <span>Recarregar Top 3 (SQL)</span>
+                    }
+                </button>
+            }
+        </div>
+
+        <div class="exec-live-controls">
+            @if (!string.IsNullOrEmpty(_liveStatusMessage))
+            {
+                <span class="badge @(_liveSucceeded == true ? "badge-online" : _liveSucceeded == false ? "badge-starting" : "badge-offline")">
+                    <span class="status-dot" aria-hidden="true"></span>
+                    @_liveStatusMessage
+                </span>
+            }
+            else
+            {
+                <span class="exec-pill">
+                    Base carregada: Snapshot Oficial Excel (59 registros · Top 3 por PJ)
+                </span>
+            }
+        </div>
+    </section>
+
+    <!-- =====================================================================
+         2. LINHA DE 6 KPIS EXECUTIVOS NO TOPO
+         ===================================================================== -->
+    <section aria-label="KPIs Executivos">
+        <div class="exec-kpi-grid">
+            <!-- KPI 1 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#3B82F6;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Carteira Monitorada</span>
+                    <div class="exec-kpi-icon" style="background:rgba(59,130,246,0.16);color:#60A5FA;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                            <circle cx="9" cy="7" r="4" />
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@analytics.TotalClientes @(analytics.TotalClientes == 1 ? "Cliente PJ" : "Clientes PJ")</div>
+                <div class="exec-kpi-sub">
+                    @analytics.TotalTickets tickets analisados; @analytics.Contas3Tickets contas com 3 tickets, @analytics.Contas2Tickets com 2 tickets, @analytics.Contas1Ticket com 1 ticket
+                </div>
+            </article>
+
+            <!-- KPI 2 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#10B981;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Taxa de Resolução Recente</span>
+                    <div class="exec-kpi-icon" style="background:rgba(16,185,129,0.16);color:#34D399;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                            <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@($"{Fmt2(analytics.TaxaResolucaoPct)}% Concluídos")</div>
+                <div class="exec-kpi-sub">
+                    @($"{analytics.TotalConcluidos} tickets: {analytics.QtdResolvido} Resolvidos + {analytics.QtdFechado} Fechados | {analytics.QtdCancelado} Cancelados")
+                </div>
+            </article>
+
+            <!-- KPI 3 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#F59E0B;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Fila Ativa na Carteira</span>
+                    <div class="exec-kpi-icon" style="background:rgba(245,158,11,0.16);color:#FBBF24;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@($"{analytics.TotalPendentes} Chamados Pendentes")</div>
+                <div class="exec-kpi-sub">
+                    @($"{Fmt2(analytics.PctPendentes)}% do total, distribuídos em {analytics.ClientesComPendentes} {(analytics.ClientesComPendentes == 1 ? "cliente" : "clientes")}: {analytics.EmAtendimentoClienteTexto} e {analytics.QtdAguardando} Aguardando")
+                </div>
+            </article>
+
+            <!-- KPI 4 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#EF4444;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Índice de Severidade (Pressão N3)</span>
+                    <div class="exec-kpi-icon" style="background:rgba(239,68,68,0.16);color:#F87171;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@($"{Fmt2(analytics.IndiceSeveridadePct)}% Alta/Crítica")</div>
+                <div class="exec-kpi-sub">
+                    @($"{analytics.TotalAltaCritica} tickets: {analytics.QtdCritica} Crítica/Impeditiva [{Fmt2(analytics.PctCritica)}%] + {analytics.QtdAlta} Alta [{Fmt2(analytics.PctAlta)}%]")
+                </div>
+            </article>
+
+            <!-- KPI 5 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#06B6D4;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Cadência de Acionamento (Mediana)</span>
+                    <div class="exec-kpi-icon" style="background:rgba(6,182,212,0.16);color:#22D3EE;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@(analytics.CadenciaMedianaDias.HasValue ? $"{Fmt1(analytics.CadenciaMedianaDias.Value)} dias" : "--")</div>
+                <div class="exec-kpi-sub">
+                    @(analytics.CadenciaMediaDias.HasValue
+                        ? $"entre chamados do mesmo cliente (Média: {Fmt2(analytics.CadenciaMediaDias.Value)} dias)"
+                        : "Requer ao menos 2 tickets no mesmo cliente")
+                </div>
+            </article>
+
+            <!-- KPI 6 -->
+            <article class="exec-kpi-card">
+                <div class="exec-kpi-bar" style="background:#C59217;"></div>
+                <div class="exec-kpi-top">
+                    <span class="exec-kpi-title">Recência Média da Carteira (Posição 1)</span>
+                    <div class="exec-kpi-icon" style="background:rgba(197,146,23,0.2);color:#FCD34D;">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                            <line x1="16" y1="2" x2="16" y2="6" />
+                            <line x1="8" y1="2" x2="8" y2="6" />
+                            <line x1="3" y1="10" x2="21" y2="10" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="exec-kpi-value">@(analytics.RecenciaMedianaDias.HasValue ? $"Mediana de {Fmt0Or1(analytics.RecenciaMedianaDias.Value)} dias" : "--")</div>
+                <div class="exec-kpi-sub">
+                    @(analytics.RecenciaMediaDias.HasValue
+                        ? $"desde o último contato (Média: {Fmt2(analytics.RecenciaMediaDias.Value)} dias)"
+                        : "Sem clientes no recorte atual")
+                </div>
+            </article>
+        </div>
+    </section>
+
+    <!-- =====================================================================
+         3. GRÁFICOS GERENCIAIS INTERATIVOS (GRID CENTRAL 2x2)
+         ===================================================================== -->
+    <section aria-label="Gráficos Gerenciais">
+        <div class="exec-section-row" style="margin-bottom:12px;">
+            <h2 class="exec-section-heading"><span class="exec-section-accent"></span> Painel Analítico da Carteira</h2>
+            <span class="exec-pill">Clique em qualquer plataforma, cliente, status ou legenda para filtrar o painel</span>
+        </div>
+
+        <div class="exec-charts-grid">
+            <!-- Gráfico 1: Volume e Severidade por Plataforma -->
+            <article class="card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <h2>1. Volume e Severidade por Plataforma (Serviço x Urgência)</h2>
+                        <span class="card-subtitle">Distribuição dos chamados segmentada por nível de criticidade</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    @{
+                        int sumCrit = analytics.Platforms.Sum(p => p.Critica);
+                        int sumAlta = analytics.Platforms.Sum(p => p.Alta);
+                        int sumMed = analytics.Platforms.Sum(p => p.Media);
+                        int sumBaixa = analytics.Platforms.Sum(p => p.Baixa);
+                        int maxPlat = analytics.Platforms.Count > 0 ? Math.Max(1, analytics.Platforms.Max(p => p.Total)) : 1;
+                    }
+                    <div class="exec-legend-bar">
+                        <button type="button" class="exec-legend-item @(_filter.Urgencia == "Crítica/Impeditiva" ? "active-filter" : "")" @onclick='() => ToggleUrgencyFilter("Crítica/Impeditiva")'>
+                            <span class="exec-swatch" style="background:#EF4444;"></span> Crítica/Impeditiva (@sumCrit)
+                        </button>
+                        <button type="button" class="exec-legend-item @(_filter.Urgencia == "Alta" ? "active-filter" : "")" @onclick='() => ToggleUrgencyFilter("Alta")'>
+                            <span class="exec-swatch" style="background:#F97316;"></span> Alta (@sumAlta)
+                        </button>
+                        <button type="button" class="exec-legend-item @(_filter.Urgencia == "Média" ? "active-filter" : "")" @onclick='() => ToggleUrgencyFilter("Média")'>
+                            <span class="exec-swatch" style="background:#3B82F6;"></span> Média (@sumMed)
+                        </button>
+                        <button type="button" class="exec-legend-item @(_filter.Urgencia == "Baixa" ? "active-filter" : "")" @onclick='() => ToggleUrgencyFilter("Baixa")'>
+                            <span class="exec-swatch" style="background:#10B981;"></span> Baixa (@sumBaixa)
+                        </button>
+                    </div>
+
+                    @if (analytics.Platforms.Count == 0)
+                    {
+                        <div class="log-empty">Nenhum dado de plataforma no recorte atual.</div>
+                    }
+                    else
+                    {
+                        <div class="exec-hbar-list">
+                            @foreach (var plat in analytics.Platforms)
+                            {
+                                var servicoNome = plat.Servico;
+                                bool isSelected = string.Equals(_filter.Servico, servicoNome, StringComparison.Ordinal);
+                                double wCrit = plat.Critica * 100.0 / maxPlat;
+                                double wAlta = plat.Alta * 100.0 / maxPlat;
+                                double wMed = plat.Media * 100.0 / maxPlat;
+                                double wBaixa = plat.Baixa * 100.0 / maxPlat;
+                                string platTitle = $"{servicoNome}: {plat.Total} tickets ({Fmt2(plat.PctTotal)}%)";
+
+                                <div class="exec-hbar-row @(isSelected ? "active-row" : "")"
+                                     @onclick="() => ToggleServiceFilter(servicoNome)"
+                                     title="@platTitle">
+                                    <div class="exec-hbar-head">
+                                        <span style="font-weight:700;color:#F8FAFC;">@servicoNome</span>
+                                        <span style="color:#CBD5E1;font-variant-numeric:tabular-nums;">
+                                            <strong>@plat.Total</strong> (@Fmt2(plat.PctTotal)%)
+                                        </span>
+                                    </div>
+                                    <div class="exec-hbar-track">
+                                        @if (plat.Critica > 0)
+                                        {
+                                            <div class="exec-hbar-seg" style="width:@Inv(wCrit)%;background:#EF4444;color:#FFFFFF;" title="Crítica/Impeditiva: @plat.Critica">
+                                                @(wCrit >= 5.5 ? plat.Critica.ToString() : "")
+                                            </div>
+                                        }
+                                        @if (plat.Alta > 0)
+                                        {
+                                            <div class="exec-hbar-seg" style="width:@Inv(wAlta)%;background:#F97316;color:#0B1120;" title="Alta: @plat.Alta">
+                                                @(wAlta >= 5.5 ? plat.Alta.ToString() : "")
+                                            </div>
+                                        }
+                                        @if (plat.Media > 0)
+                                        {
+                                            <div class="exec-hbar-seg" style="width:@Inv(wMed)%;background:#3B82F6;color:#FFFFFF;" title="Média: @plat.Media">
+                                                @(wMed >= 5.5 ? plat.Media.ToString() : "")
+                                            </div>
+                                        }
+                                        @if (plat.Baixa > 0)
+                                        {
+                                            <div class="exec-hbar-seg" style="width:@Inv(wBaixa)%;background:#10B981;color:#0B1120;" title="Baixa: @plat.Baixa">
+                                                @(wBaixa >= 5.5 ? plat.Baixa.ToString() : "")
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <!-- Gráfico 3: Distribuição de Status (Donut SVG 100% Offline) -->
+            <article class="card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <h2>3. Distribuição de Status da Carteira</h2>
+                        <span class="card-subtitle">Proporção entre concluídos, cancelados e fila ativa em aberto</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    @{
+                        const double radius = 74.0;
+                        const double cx = 110.0;
+                        const double cy = 110.0;
+                        double circ = 2.0 * Math.PI * radius;
+                        int safeTotal = Math.Max(1, analytics.TotalTickets);
+                        double cumulativeOffset = 0.0;
+                    }
+                    <div class="exec-donut-wrap">
+                        <div class="exec-donut-svg-box">
+                            <svg width="220" height="220" viewBox="0 0 220 220" role="img" aria-label="Distribuição de Status da Carteira">
+                                <circle cx="@Inv(cx)" cy="@Inv(cy)" r="@Inv(radius)" fill="none" stroke="#1E293B" stroke-width="28" />
+                                @if (analytics.TotalTickets > 0)
+                                {
+                                    <g transform="rotate(-90 110 110)">
+                                        @foreach (var slice in analytics.StatusDistribution)
+                                        {
+                                            if (slice.Count <= 0) continue;
+                                            double dash = slice.Count * circ / safeTotal;
+                                            double gap = Math.Max(0.0, circ - dash);
+                                            double dashOffset = -cumulativeOffset;
+                                            cumulativeOffset += dash;
+                                            var sliceStatus = slice.Status;
+                                            bool isSliceSelected = string.Equals(_filter.Status, sliceStatus, StringComparison.Ordinal);
+
+                                            string strokeWidth = isSliceSelected ? "33" : "28";
+                                            string dashArray = $"{Inv(dash)} {Inv(gap)}";
+                                            string dashOffsetStr = Inv(dashOffset);
+                                            string sliceTitle = $"{sliceStatus}: {slice.Count} ({Fmt2(slice.PctTotal)}%)";
+
+                                            <circle cx="@Inv(cx)"
+                                                    cy="@Inv(cy)"
+                                                    r="@Inv(radius)"
+                                                    fill="none"
+                                                    stroke="@slice.ColorHex"
+                                                    stroke-width="@strokeWidth"
+                                                    stroke-dasharray="@dashArray"
+                                                    stroke-dashoffset="@dashOffsetStr"
+                                                    style="cursor:pointer;"
+                                                    @onclick="() => ToggleStatusFilter(sliceStatus)">
+                                                <title>@sliceTitle</title>
+                                            </circle>
+                                        }
+                                    </g>
+                                }
+                            </svg>
+                            <div class="exec-donut-center">
+                                <span class="exec-donut-total">@analytics.TotalTickets</span>
+                                <span class="exec-donut-pct">@($"{Fmt1(analytics.TaxaResolucaoPct)}% concl.")</span>
+                            </div>
+                        </div>
+
+                        <div class="exec-donut-table">
+                            @foreach (var slice in analytics.StatusDistribution)
+                            {
+                                var sliceStatus = slice.Status;
+                                bool activeSlice = string.Equals(_filter.Status, sliceStatus, StringComparison.Ordinal);
+                                string activeStyle = activeSlice ? "border-color:#c59217;background:rgba(197,146,23,0.16);" : string.Empty;
+                                <button type="button"
+                                        class="exec-donut-row"
+                                        style="@activeStyle"
+                                        @onclick="() => ToggleStatusFilter(sliceStatus)">
+                                    <span style="display:inline-flex;align-items:center;gap:8px;color:#F1F5F9;font-weight:650;">
+                                        <span class="exec-swatch" style="background:@slice.ColorHex;"></span>
+                                        @sliceStatus
+                                    </span>
+                                    <span style="color:#CBD5E1;font-variant-numeric:tabular-nums;">
+                                        <strong>@slice.Count</strong> · @Fmt2(slice.PctTotal)%
+                                    </span>
+                                </button>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <!-- Gráfico 2: Termômetro de Recência por Cliente (Posição 1) -->
+            <article class="card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <h2>2. Termômetro de Recência por Cliente (Posição 1)</h2>
+                        <span class="card-subtitle">Dias desde a abertura do último chamado · Verde (&lt;30d) · Amarelo (30–79d) · Vermelho (&ge;80d)</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="exec-legend-bar">
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#10B981;"></span> Ativo (&lt; 30d)</span>
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#F59E0B;"></span> Atenção (30–79d)</span>
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#EF4444;"></span> Silencioso / Risco (&ge; 80d)</span>
+                    </div>
+
+                    @if (analytics.RecencyRanking.Count == 0)
+                    {
+                        <div class="log-empty">Nenhum cliente no recorte atual.</div>
+                    }
+                    else
+                    {
+                        int maxRecency = Math.Max(1, analytics.RecencyRanking.Max(c => c.RecencyDays));
+                        <div class="exec-hbar-compact">
+                            @foreach (var item in analytics.RecencyRanking)
+                            {
+                                var cliNome = item.Cliente;
+                                bool selectedCli = string.Equals(_filter.Cliente, cliNome, StringComparison.Ordinal);
+                                string barColor = GetRecencyColor(item.RecencyDays);
+                                double barWidth = Math.Clamp(item.RecencyDays * 100.0 / maxRecency, item.RecencyDays > 0 ? 2.5 : 0.8, 100.0);
+                                string barTitle = $"{cliNome}: {item.RecencyDays}d | Último: #{item.LatestTicket.TicketId} ({item.LatestTicket.Servico}) — {item.LatestTicket.Assunto}";
+
+                                <div class="exec-rank-row @(selectedCli ? "active-row" : "")"
+                                     @onclick="() => ToggleClientFilter(cliNome)"
+                                     title="@barTitle">
+                                    <span class="exec-rank-name">@item.ShortName</span>
+                                    <div class="exec-rank-track">
+                                        <div class="exec-rank-fill" style="width:@Inv(barWidth)%;background:@barColor;"></div>
+                                    </div>
+                                    <span class="exec-rank-val" style="color:@barColor;">@($"{item.RecencyDays}d")</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <!-- Gráfico 4: Pressão de Recorrência por Conta (Cadência Média) -->
+            <article class="card">
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <h2>4. Pressão de Recorrência por Conta (Intervalo Médio)</h2>
+                        <span class="card-subtitle">Intervalo médio em dias entre os 3 últimos tickets · Rajadas curtas (&lt;15d) destacadas</span>
+                    </div>
+                    <div class="exec-segmented" role="group" aria-label="Modo do Gráfico 4">
+                        <button type="button" class="exec-seg-btn @(_cadenceMode == "BAR" ? "active" : "")" @onclick='() => _cadenceMode = "BAR"'>Barras</button>
+                        <button type="button" class="exec-seg-btn @(_cadenceMode == "SCATTER" ? "active" : "")" @onclick='() => _cadenceMode = "SCATTER"'>Dispersão</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="exec-legend-bar">
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#EF4444;"></span> Rajada Crítica (&lt; 7d)</span>
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#F97316;"></span> Pressão Alta (7–14,9d)</span>
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#3B82F6;"></span> Normal (15–45d)</span>
+                        <span class="exec-legend-item" style="cursor:default;"><span class="exec-swatch" style="background:#64748B;"></span> Espaçado (&gt; 45d)</span>
+                    </div>
+
+                    @if (analytics.CadenceRanking.Count == 0)
+                    {
+                        <div class="log-empty">São necessários ao menos 2 tickets no mesmo cliente para calcular a cadência.</div>
+                    }
+                    else if (_cadenceMode == "BAR")
+                    {
+                        double maxCad = Math.Max(1.0, analytics.CadenceRanking.Max(c => c.AvgCadenceDays!.Value));
+                        <div class="exec-hbar-compact">
+                            @foreach (var item in analytics.CadenceRanking)
+                            {
+                                var cliNome = item.Cliente;
+                                double cad = item.AvgCadenceDays!.Value;
+                                bool selectedCli = string.Equals(_filter.Cliente, cliNome, StringComparison.Ordinal);
+                                string cadColor = GetCadenceColor(cad);
+                                double w = Math.Clamp(cad * 100.0 / maxCad, 3.0, 100.0);
+                                string cadTitle = $"{cliNome}: Cadência média {Fmt2(cad)}d | Pendentes: {item.PendingCount}";
+
+                                <div class="exec-rank-row @(selectedCli ? "active-row" : "")"
+                                     @onclick="() => ToggleClientFilter(cliNome)"
+                                     title="@cadTitle">
+                                    <span class="exec-rank-name">@item.ShortName</span>
+                                    <div class="exec-rank-track">
+                                        <div class="exec-rank-fill" style="width:@Inv(w)%;background:@cadColor;"></div>
+                                    </div>
+                                    <span class="exec-rank-val" style="color:@cadColor;">@($"{Fmt2(cad)}d")</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        double maxX = Math.Max(90.0, analytics.CadenceRanking.Max(c => c.RecencyDays) * 1.08);
+                        double maxY = Math.Max(20.0, analytics.CadenceRanking.Max(c => c.AvgCadenceDays!.Value) * 1.12);
+                        double thrX = 8.0 + (80.0 / maxX) * 84.0;
+                        double thrY = 88.0 - (15.0 / maxY) * 74.0;
+                        var placedTags = BuildNonOverlappingScatterTags(analytics.CadenceRanking, maxX, maxY);
+
+                        <div class="exec-scatter-stage">
+                            <svg class="exec-scatter-svg" viewBox="0 0 640 340" preserveAspectRatio="none" role="img" aria-label="Dispersão Recência vs Cadência">
+                                @for (int g = 0; g <= 4; g++)
+                                {
+                                    double gy = 340.0 * (88.0 - g * (74.0 / 4.0)) / 100.0;
+                                    <line x1="48" y1="@Inv(gy)" x2="612" y2="@Inv(gy)" stroke="rgba(148,163,184,0.14)" stroke-width="1" />
+                                }
+                                @if (thrX <= 92.0)
+                                {
+                                    double sx = thrX * 6.4;
+                                    <line x1="@Inv(sx)" y1="28" x2="@Inv(sx)" y2="305" stroke="rgba(239,68,68,0.45)" stroke-dasharray="4 4" stroke-width="1.2" />
+                                }
+                                @if (thrY >= 14.0 && thrY <= 88.0)
+                                {
+                                    double sy = thrY * 3.4;
+                                    <line x1="48" y1="@Inv(sy)" x2="612" y2="@Inv(sy)" stroke="rgba(249,115,22,0.45)" stroke-dasharray="4 4" stroke-width="1.2" />
+                                }
+
+                                @foreach (var item in analytics.CadenceRanking)
+                                {
+                                    var cliNome = item.Cliente;
+                                    double cad = item.AvgCadenceDays!.Value;
+                                    double xPct = 8.0 + (item.RecencyDays / maxX) * 84.0;
+                                    double yPct = 88.0 - (cad / maxY) * 74.0;
+                                    double cxPlot = xPct * 6.4;
+                                    double cyPlot = yPct * 3.4;
+                                    double rad = 6.0 + item.PendingCount * 3.5;
+                                    string col = GetCadenceColor(cad);
+                                    bool activeCli = string.Equals(_filter.Cliente, cliNome, StringComparison.Ordinal);
+                                    string dotRadius = Inv(activeCli ? rad + 2.5 : rad);
+                                    string dotStroke = item.PendingCount > 0 ? "#FCD34D" : "#F8FAFC";
+                                    string dotStrokeWidth = (item.PendingCount > 0 || activeCli) ? "2" : "1";
+                                    string dotTitle = $"{cliNome} · Recência: {item.RecencyDays}d · Cadência Média: {Fmt2(cad)}d · Pendentes: {item.PendingCount}";
+
+                                    <circle class="exec-scatter-dot"
+                                            cx="@Inv(cxPlot)"
+                                            cy="@Inv(cyPlot)"
+                                            r="@dotRadius"
+                                            fill="@col"
+                                            fill-opacity="0.86"
+                                            stroke="@dotStroke"
+                                            stroke-width="@dotStrokeWidth"
+                                            @onclick="() => ToggleClientFilter(cliNome)">
+                                        <title>@dotTitle</title>
+                                    </circle>
+                                }
+                            </svg>
+
+                            @foreach (var tag in placedTags)
+                            {
+                                <span class="exec-scatter-tag" style="left:@Inv(tag.LeftPct)%;top:@Inv(tag.TopPct)%;">
+                                    @tag.Label
+                                </span>
+                            }
+
+                            <span class="exec-scatter-axis-y">↑ Cadência Média (dias) · Linha laranja = 15d</span>
+                            <span class="exec-scatter-axis-x">Recência Posição 1 (dias) → Linha vermelha = 80d</span>
+                        </div>
+                    }
+                </div>
+            </article>
+        </div>
+    </section>
+
+    <!-- =====================================================================
+         4. PAINEL DE ALERTAS DE GESTÃO (DIAGNÓSTICO AUTOMÁTICO)
+         ===================================================================== -->
+    <section aria-label="Diagnóstico Executivo de Reincidência e Risco">
+        <div class="exec-section-row" style="margin-bottom:12px;">
+            <h2 class="exec-section-heading"><span class="exec-section-accent"></span> Diagnóstico Executivo de Reincidência e Risco</h2>
+            <span class="exec-pill">Clique em qualquer cartão para focar o cliente no Raio-X 3x3</span>
+        </div>
+
+        <div class="exec-insights-grid">
+            <!-- Card 1: Reincidência Crônica -->
+            <article class="exec-insight-card">
+                <div class="exec-insight-head">
+                    <div class="exec-insight-title-wrap">
+                        <div class="exec-insight-icon" style="background:rgba(249,115,22,0.16);color:#FB923C;">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10" />
+                                <polyline points="1 20 1 14 7 14" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                            </svg>
+                        </div>
+                        <h3>Reincidência Crônica por Produto</h3>
+                    </div>
+                    <span class="exec-badge urg-alta">@analytics.ChronicAlerts.Count alerta(s)</span>
+                </div>
+
+                @if (analytics.ChronicAlerts.Count == 0)
+                {
+                    <div class="log-empty">Nenhum foco de reincidência crônica no recorte filtrado.</div>
+                }
+                else
+                {
+                    <ul class="exec-insight-list">
+                        @foreach (var alert in analytics.ChronicAlerts)
+                        {
+                            var targetCliente = alert.Cliente;
+                            <li class="exec-insight-item" @onclick='() => FocusClientFromAlertAsync(targetCliente, "ALL")'>
+                                <div class="exec-insight-row-top">
+                                    <strong>@alert.Title</strong>
+                                    <span class="exec-badge @alert.TagCssClass">@alert.Tag</span>
+                                </div>
+                                <div>@alert.Details</div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </article>
+
+            <!-- Card 2: Radar de Pendências Envelhecidas -->
+            <article class="exec-insight-card">
+                <div class="exec-insight-head">
+                    <div class="exec-insight-title-wrap">
+                        <div class="exec-insight-icon" style="background:rgba(245,158,11,0.16);color:#FBBF24;">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                            </svg>
+                        </div>
+                        <h3>Pendências Envelhecidas (&gt; 15 dias)</h3>
+                    </div>
+                    <span class="exec-badge st-aguardando">@analytics.TotalAgedWaitingTickets ticket(s)</span>
+                </div>
+
+                @if (analytics.AgedWaitingGroups.Count == 0)
+                {
+                    <div class="log-empty">Nenhum chamado em status Aguardando acima de 15 dias neste recorte.</div>
+                }
+                else
+                {
+                    <ul class="exec-insight-list">
+                        @foreach (var grp in analytics.AgedWaitingGroups)
+                        {
+                            var targetCliente = grp.Cliente;
+                            var details = string.Join(" · ", grp.Tickets.Select(x => $"#{x.Ticket.TicketId} ({x.AgeDays}d · {x.Ticket.Servico}) — {x.Ticket.Assunto}"));
+                            <li class="exec-insight-item" @onclick='() => FocusClientFromAlertAsync(targetCliente, "Aguardando")'>
+                                <div class="exec-insight-row-top">
+                                    <strong>@grp.Cliente</strong>
+                                    <span class="exec-badge st-aguardando">@($"{grp.MaxDays}d Aguardando")</span>
+                                </div>
+                                <div>@details</div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </article>
+
+            <!-- Card 3: Risco Contratual & Churn Silencioso -->
+            <article class="exec-insight-card">
+                <div class="exec-insight-head">
+                    <div class="exec-insight-title-wrap">
+                        <div class="exec-insight-icon" style="background:rgba(239,68,68,0.16);color:#F87171;">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                <line x1="12" y1="9" x2="12" y2="13" />
+                                <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                        </div>
+                        <h3>Alerta de Risco Contratual &amp; Silêncio</h3>
+                    </div>
+                    <span class="exec-badge urg-critica">@analytics.ContractRiskAlerts.Count ponto(s)</span>
+                </div>
+
+                @if (analytics.ContractRiskAlerts.Count == 0)
+                {
+                    <div class="log-empty">Nenhum sinal de risco contratual ou inatividade crítica no recorte.</div>
+                }
+                else
+                {
+                    <ul class="exec-insight-list">
+                        @foreach (var risk in analytics.ContractRiskAlerts)
+                        {
+                            var targetCliente = risk.Cliente;
+                            <li class="exec-insight-item" @onclick='() => FocusClientFromAlertAsync(targetCliente, "ALL")'>
+                                <div class="exec-insight-row-top">
+                                    <strong>@risk.Title</strong>
+                                    <span class="exec-badge @risk.BadgeCssClass">@risk.Badge</span>
+                                </div>
+                                <div>@risk.Details</div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </article>
+        </div>
+    </section>
+
+    <!-- =====================================================================
+         5. FILTROS DINÂMICOS + MATRIZ INTERATIVA "RAIO-X 3x3 POR CLIENTE"
+         ===================================================================== -->
+    <section id="raiox-section" aria-label="Matriz Interativa Raio-X 3x3 por Cliente">
+        <div class="exec-section-row" style="margin-bottom:12px;">
+            <h2 class="exec-section-heading"><span class="exec-section-accent"></span> Matriz Interativa "Raio-X 3x3 por Cliente"</h2>
+            <div class="exec-segmented" role="group" aria-label="Modo de Visualização do Raio-X">
+                <button type="button" class="exec-seg-btn @(_viewMode == "CARDS" ? "active" : "")" @onclick='() => _viewMode = "CARDS"'>Cards 3x3</button>
+                <button type="button" class="exec-seg-btn @(_viewMode == "TABLE" ? "active" : "")" @onclick='() => _viewMode = "TABLE"'>Tabela Expansível</button>
+            </div>
+        </div>
+
+        <div class="exec-filter-panel exec-print-hide" style="margin-bottom:16px;">
+            <div class="exec-filter-grid">
+                <div class="exec-field">
+                    <label for="exec-filter-cliente">Cliente (PJ)</label>
+                    <select id="exec-filter-cliente" class="exec-control" value="@_filter.Cliente" @onchange="OnClienteChanged">
+                        <option value="ALL">Todos os Clientes (@clienteOptions.Count)</option>
+                        @foreach (var cli in clienteOptions)
+                        {
+                            <option value="@cli">@cli</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="exec-field">
+                    <label for="exec-filter-servico">Serviço / Plataforma</label>
+                    <select id="exec-filter-servico" class="exec-control" value="@_filter.Servico" @onchange="OnServicoChanged">
+                        <option value="ALL">Todos os Serviços (@servicoOptions.Count)</option>
+                        @foreach (var svc in servicoOptions)
+                        {
+                            <option value="@svc">@svc</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="exec-field">
+                    <label for="exec-filter-status">Status</label>
+                    <select id="exec-filter-status" class="exec-control" value="@_filter.Status" @onchange="OnStatusChanged">
+                        <option value="ALL">Todos os Status</option>
+                        <option value="PENDING">Apenas Pendentes (Aguardando / Em atend.)</option>
+                        <option value="DONE">Apenas Concluídos (Resolvido / Fechado)</option>
+                        <option value="Resolvido">Resolvido</option>
+                        <option value="Fechado">Fechado</option>
+                        <option value="Aguardando">Aguardando</option>
+                        <option value="Em atendimento">Em atendimento</option>
+                        <option value="Cancelado">Cancelado</option>
+                    </select>
+                </div>
+
+                <div class="exec-field">
+                    <label for="exec-filter-urgencia">Urgência</label>
+                    <select id="exec-filter-urgencia"
+                            class="exec-control"
+                            value="@(_filter.UrgenciaGrupo == "HIGH_CRIT" ? "ALL" : _filter.Urgencia)"
+                            @onchange="OnUrgenciaChanged">
+                        <option value="ALL">Todas as Urgências</option>
+                        <option value="Crítica/Impeditiva">Crítica/Impeditiva</option>
+                        <option value="Alta">Alta</option>
+                        <option value="Média">Média</option>
+                        <option value="Baixa">Baixa</option>
+                    </select>
+                </div>
+
+                <div class="exec-field">
+                    <label for="exec-filter-search">Busca no Assunto / #Ticket</label>
+                    <input id="exec-filter-search"
+                           type="search"
+                           class="exec-control"
+                           placeholder="Ex.: Sisbajud, Regra C07, MB21, 54887..."
+                           value="@_filter.SearchText"
+                           @oninput="OnSearchInput" />
+                </div>
+            </div>
+
+            <div class="exec-filter-footer">
+                <div class="exec-quick-pills">
+                    <span style="font-size:0.74rem;color:var(--muted);font-weight:700;margin-right:4px;">ATALHOS:</span>
+                    <button type="button"
+                            class="exec-filter-pill @(_filter.Status == "ALL" && _filter.Urgencia == "ALL" && _filter.UrgenciaGrupo == "ALL" ? "active" : "")"
+                            @onclick='() => ApplyQuickStatus("ALL")'>
+                        Todos (@_sourceTickets.Count)
+                    </button>
+                    <button type="button"
+                            class="exec-filter-pill @(_filter.Status == "PENDING" ? "active" : "")"
+                            @onclick='() => ApplyQuickStatus("PENDING")'>
+                        Apenas Pendentes (@allSourcePendingCount)
+                    </button>
+                    <button type="button"
+                            class="exec-filter-pill @(_filter.Status == "DONE" ? "active" : "")"
+                            @onclick='() => ApplyQuickStatus("DONE")'>
+                        Apenas Concluídos (@allSourceDoneCount)
+                    </button>
+                    <button type="button"
+                            class="exec-filter-pill @(_filter.UrgenciaGrupo == "HIGH_CRIT" ? "active" : "")"
+                            @onclick="ToggleHighCriticalGroup">
+                        Alta / Crítica (@allSourceHighCritCount)
+                    </button>
+                </div>
+
+                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                    <select class="exec-select-compact" value="@_filter.SortMode.ToString()" @onchange="OnSortChanged" title="Ordenação dos clientes">
+                        <option value="@nameof(CarteiraSortMode.Alpha)">Ordenar: Cliente (A–Z)</option>
+                        <option value="@nameof(CarteiraSortMode.PendingFirst)">Ordenar: Mais Pendentes Primeiro</option>
+                        <option value="@nameof(CarteiraSortMode.RecencyDesc)">Ordenar: Maior Silêncio (Recência)</option>
+                        <option value="@nameof(CarteiraSortMode.CadenceAsc)">Ordenar: Menor Cadência (Rajadas)</option>
+                    </select>
+                    <button type="button" class="btn btn-ghost" style="padding:7px 12px;font-size:0.8rem;" @onclick="ResetFilters">
+                        Limpar Filtros
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        @if (analytics.SortedClients.Count == 0)
+        {
+            <div class="exec-empty-state">
+                <strong style="color:#FFFFFF;display:block;margin-bottom:6px;">Nenhum ticket encontrado para os filtros combinados.</strong>
+                <span>Clique em "Limpar Filtros" para restaurar toda a carteira.</span>
+            </div>
+        }
+        else if (_viewMode == "CARDS")
+        {
+            <div class="exec-matrix-list">
+                @foreach (var client in analytics.SortedClients)
+                {
+                    <article class="exec-client-card @(client.HasContractRisk ? "has-risk" : "")" @key="client.Cliente">
+                        <div class="exec-client-head">
+                            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
+                                <h3 class="exec-client-title">@client.Cliente</h3>
+                                <span class="exec-badge @GetRecencyCssClass(client.RecencyDays)">
+                                    @($"{client.RecencyDays}d desde último")
+                                </span>
+                                @if (client.HasContractRisk)
+                                {
+                                    <span class="exec-badge urg-critica">Risco Contratual</span>
+                                }
+                            </div>
+
+                            <div style="display:flex;flex-wrap:wrap;gap:7px;align-items:center;">
+                                <span class="exec-pill">
+                                    @(client.AvgCadenceDays.HasValue
+                                        ? $"Cadência média: {Fmt2(client.AvgCadenceDays.Value)}d"
+                                        : "Ticket único")
+                                </span>
+                                @if (client.PendingCount > 0)
+                                {
+                                    <span class="exec-badge st-aguardando">@($"{client.PendingCount} pendente(s)")</span>
+                                }
+                                else
+                                {
+                                    <span class="exec-badge st-resolvido">Sem pendências</span>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="exec-tickets-3col">
+                            @for (int slot = 1; slot <= 3; slot++)
+                            {
+                                int pos = slot;
+                                var t = client.Tickets.FirstOrDefault(x => x.Posicao == pos);
+                                if (t is null)
+                                {
+                                    <div class="exec-ticket-slot slot-empty">
+                                        @($"{pos}º Último Ticket — não aplicável neste recorte")
+                                    </div>
+                                }
+                                else
+                                {
+                                    bool isPend = CarteiraExecutivaService.IsPendingStatus(t.Status);
+                                    <div class="exec-ticket-slot @(isPend ? "slot-pending" : "")">
+                                        <div class="exec-slot-head">
+                                            <span class="exec-pos-label">@($"{pos}º Último Ticket")</span>
+                                            <span class="exec-ticket-id">#@t.TicketId</span>
+                                        </div>
+                                        <div class="exec-slot-meta">
+                                            <span>@t.DataAbertura.ToString("dd/MM/yyyy HH:mm", CarteiraExecutivaService.PtBr)</span>
+                                            <span class="svc-chip">@t.Servico</span>
+                                        </div>
+                                        <div class="exec-slot-subject">
+                                            @foreach (var seg in SplitForHighlight(t.Assunto, _filter.SearchText))
+                                            {
+                                                if (seg.IsMatch)
+                                                {
+                                                    <mark class="hl">@seg.Text</mark>
+                                                }
+                                                else
+                                                {
+                                                    @seg.Text
+                                                }
+                                            }
+                                        </div>
+                                        <div class="exec-slot-badges">
+                                            <span class="exec-badge @GetStatusBadgeCssClass(t.Status)">@t.Status</span>
+                                            <span class="exec-badge @GetUrgencyBadgeCssClass(t.Urgencia)">@t.Urgencia</span>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="exec-table-card">
+                <table class="exec-raiox-table">
+                    <thead>
+                        <tr>
+                            <th>Cliente PJ</th>
+                            <th>Tickets</th>
+                            <th>Recência (Pos. 1)</th>
+                            <th>Cadência Média</th>
+                            <th>Pendentes</th>
+                            <th>Último Ticket (#ID · Serviço · Assunto)</th>
+                            <th>Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var client in analytics.SortedClients)
+                        {
+                            var cliKey = client.Cliente;
+                            bool isExpanded = _expandedClients.Contains(cliKey);
+                            var lat = client.LatestTicket;
+
+                            <tr class="client-summary-row" @key="@($"row-{cliKey}")" @onclick="() => ToggleExpandClient(cliKey)">
+                                <td>
+                                    <strong style="color:#FFFFFF;">@client.Cliente</strong>
+                                    @if (client.HasContractRisk)
+                                    {
+                                        <span class="exec-badge urg-critica" style="margin-left:6px;">Cancelamento</span>
+                                    }
+                                </td>
+                                <td>@client.Tickets.Count / 3</td>
+                                <td>
+                                    <span class="exec-badge @GetRecencyCssClass(client.RecencyDays)">@($"{client.RecencyDays}d")</span>
+                                </td>
+                                <td>@(client.AvgCadenceDays.HasValue ? $"{Fmt2(client.AvgCadenceDays.Value)}d" : "—")</td>
+                                <td>
+                                    @if (client.PendingCount > 0)
+                                    {
+                                        <span class="exec-badge st-aguardando">@($"{client.PendingCount} pend.")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="exec-badge st-resolvido">0</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="exec-ticket-id">#@lat.TicketId</span>
+                                    <span class="svc-chip" style="margin:0 6px;">@lat.Servico</span>
+                                    @foreach (var seg in SplitForHighlight(lat.Assunto, _filter.SearchText))
+                                    {
+                                        if (seg.IsMatch)
+                                        {
+                                            <mark class="hl">@seg.Text</mark>
+                                        }
+                                        else
+                                        {
+                                            @seg.Text
+                                        }
+                                    }
+                                </td>
+                                <td style="white-space:nowrap;">
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            style="padding:4px 10px;font-size:0.76rem;"
+                                            @onclick:stopPropagation="true"
+                                            @onclick="() => ToggleExpandClient(cliKey)">
+                                        @(isExpanded ? "Recolher ▴" : "Expandir ▾")
+                                    </button>
+                                </td>
+                            </tr>
+
+                            @if (isExpanded)
+                            {
+                                <tr class="detail-row" @key="@($"det-{cliKey}")">
+                                    <td colspan="7">
+                                        <div class="exec-tickets-3col">
+                                            @for (int slot = 1; slot <= 3; slot++)
+                                            {
+                                                int pos = slot;
+                                                var t = client.Tickets.FirstOrDefault(x => x.Posicao == pos);
+                                                if (t is null)
+                                                {
+                                                    <div class="exec-ticket-slot slot-empty">
+                                                        @($"{pos}º Último Ticket — não aplicável neste recorte")
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    bool isPend = CarteiraExecutivaService.IsPendingStatus(t.Status);
+                                                    <div class="exec-ticket-slot @(isPend ? "slot-pending" : "")">
+                                                        <div class="exec-slot-head">
+                                                            <span class="exec-pos-label">@($"{pos}º Último Ticket")</span>
+                                                            <span class="exec-ticket-id">#@t.TicketId</span>
+                                                        </div>
+                                                        <div class="exec-slot-meta">
+                                                            <span>@t.DataAbertura.ToString("dd/MM/yyyy HH:mm", CarteiraExecutivaService.PtBr)</span>
+                                                            <span class="svc-chip">@t.Servico</span>
+                                                        </div>
+                                                        <div class="exec-slot-subject">
+                                                            @foreach (var seg in SplitForHighlight(t.Assunto, _filter.SearchText))
+                                                            {
+                                                                if (seg.IsMatch)
+                                                                {
+                                                                    <mark class="hl">@seg.Text</mark>
+                                                                }
+                                                                else
+                                                                {
+                                                                    @seg.Text
+                                                                }
+                                                            }
+                                                        </div>
+                                                        <div class="exec-slot-badges">
+                                                            <span class="exec-badge @GetStatusBadgeCssClass(t.Status)">@t.Status</span>
+                                                            <span class="exec-badge @GetUrgencyBadgeCssClass(t.Urgencia)">@t.Urgencia</span>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<TicketCarteiraItem> _sourceTickets = Array.Empty<TicketCarteiraItem>();
+    private readonly CarteiraFilterState _filter = new();
+    private readonly HashSet<string> _expandedClients = new(StringComparer.Ordinal);
+
+    private bool _useLiveSql;
+    private bool _loadingLive;
+    private bool? _liveSucceeded;
+    private string? _liveStatusMessage;
+
+    private string _selectedEquipe = "Sustentação e-Guardian RJ";
+    private string _selectedAnalista = "Jefferson Gonçalves Cordeiro";
+    private List<string> _equipesOptions = new() { "Sustentação e-Guardian RJ" };
+    private List<string> _analistasOptions = new() { "Jefferson Gonçalves Cordeiro" };
+
+    private string _refMode = "snapshot";
+    private string _cadenceMode = "BAR";
+    private string _viewMode = "CARDS";
+
+    private sealed record HighlightSegment(string Text, bool IsMatch);
+    private sealed record ScatterTag(string Label, double LeftPct, double TopPct);
+
+    protected override void OnInitialized()
+    {
+        _sourceTickets = CarteiraService.GetSnapshotTickets();
+    }
+
+    private DateTime GetReferenceDate() =>
+        string.Equals(_refMode, "today", StringComparison.Ordinal)
+            ? DateTime.Today
+            : CarteiraExecutivaService.SnapshotReferenceDate;
+
+    private string BuildDynamicSubtitle()
+    {
+        var parts = new List<string>();
+        if (_filter.Cliente != "ALL") parts.Add($"Cliente: {_filter.Cliente}");
+        if (_filter.Servico != "ALL") parts.Add($"Serviço: {_filter.Servico}");
+        if (_filter.Status == "PENDING") parts.Add("Status: Apenas Pendentes");
+        else if (_filter.Status == "DONE") parts.Add("Status: Apenas Concluídos");
+        else if (_filter.Status != "ALL") parts.Add($"Status: {_filter.Status}");
+        if (_filter.UrgenciaGrupo == "HIGH_CRIT") parts.Add("Urgência: Alta/Crítica");
+        else if (_filter.Urgencia != "ALL") parts.Add($"Urgência: {_filter.Urgencia}");
+        if (!string.IsNullOrWhiteSpace(_filter.SearchText)) parts.Add($"Busca: \"{_filter.SearchText.Trim()}\"");
+
+        string responsavel = _useLiveSql
+            ? (_selectedAnalista == "ALL" ? "Todos os Analistas" : _selectedAnalista)
+            : "Jefferson Gonçalves Cordeiro";
+
+        string baseText = $"Análise dos Últimos 3 Atendimentos por Cliente PJ | Responsável: {responsavel}";
+        return parts.Count > 0
+            ? $"{baseText} · Recorte ativo: {string.Join(" | ", parts)}"
+            : baseText;
+    }
+
+    private List<string> GetClienteOptions() =>
+        _sourceTickets
+            .Select(t => t.Cliente)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(c => c, CarteiraExecutivaService.PtBr.CompareInfo.GetStringComparer(CompareOptions.IgnoreCase))
+            .ToList();
+
+    private List<string> GetServicoOptions() =>
+        _sourceTickets
+            .Select(t => t.Servico)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(s => GetPlatformOrder(s))
+            .ThenBy(s => s, CarteiraExecutivaService.PtBr.CompareInfo.GetStringComparer(CompareOptions.IgnoreCase))
+            .ToList();
+
+    private void SwitchToSnapshot()
+    {
+        if (_loadingLive) return;
+        _useLiveSql = false;
+        _liveSucceeded = null;
+        _liveStatusMessage = null;
+        _sourceTickets = CarteiraService.GetSnapshotTickets();
+        _refMode = "snapshot";
+        SanitizeSelectionsAfterSourceChange();
+    }
+
+    private async Task SwitchToLiveSqlAsync()
+    {
+        if (_loadingLive) return;
+        _useLiveSql = true;
+        _refMode = "today";
+        await LoadLiveSqlAsync();
+    }
+
+    private async Task LoadLiveSqlAsync()
+    {
+        if (_loadingLive) return;
+        _loadingLive = true;
+        StateHasChanged();
+
+        try
+        {
+            var result = await CarteiraService.LoadFromSqlServerAsync(_selectedEquipe, _selectedAnalista);
+            _liveSucceeded = result.Success;
+            _liveStatusMessage = result.StatusMessage;
+            _sourceTickets = result.Tickets;
+
+            if (result.Equipes.Count > 0)
+            {
+                _equipesOptions = result.Equipes.ToList();
+            }
+            if (result.Analistas.Count > 0)
+            {
+                _analistasOptions = result.Analistas.ToList();
+            }
+
+            if (!result.Success)
+            {
+                _useLiveSql = false;
+                _refMode = "snapshot";
+            }
+
+            SanitizeSelectionsAfterSourceChange();
+        }
+        finally
+        {
+            _loadingLive = false;
+        }
+    }
+
+    private void SanitizeSelectionsAfterSourceChange()
+    {
+        if (_filter.Cliente != "ALL" && !_sourceTickets.Any(t => string.Equals(t.Cliente, _filter.Cliente, StringComparison.Ordinal)))
+        {
+            _filter.Cliente = "ALL";
+        }
+        if (_filter.Servico != "ALL" && !_sourceTickets.Any(t => string.Equals(t.Servico, _filter.Servico, StringComparison.Ordinal)))
+        {
+            _filter.Servico = "ALL";
+        }
+    }
+
+    private async Task OnLiveEquipeChanged(ChangeEventArgs e)
+    {
+        _selectedEquipe = e.Value?.ToString() ?? "ALL";
+        await LoadLiveSqlAsync();
+    }
+
+    private async Task OnLiveAnalistaChanged(ChangeEventArgs e)
+    {
+        _selectedAnalista = e.Value?.ToString() ?? "ALL";
+        await LoadLiveSqlAsync();
+    }
+
+    private void OnRefModeChanged(ChangeEventArgs e) =>
+        _refMode = e.Value?.ToString() ?? "snapshot";
+
+    private void OnClienteChanged(ChangeEventArgs e) =>
+        _filter.Cliente = e.Value?.ToString() ?? "ALL";
+
+    private void OnServicoChanged(ChangeEventArgs e) =>
+        _filter.Servico = e.Value?.ToString() ?? "ALL";
+
+    private void OnStatusChanged(ChangeEventArgs e) =>
+        _filter.Status = e.Value?.ToString() ?? "ALL";
+
+    private void OnUrgenciaChanged(ChangeEventArgs e)
+    {
+        _filter.UrgenciaGrupo = "ALL";
+        _filter.Urgencia = e.Value?.ToString() ?? "ALL";
+    }
+
+    private void OnSearchInput(ChangeEventArgs e) =>
+        _filter.SearchText = e.Value?.ToString() ?? string.Empty;
+
+    private void OnSortChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<CarteiraSortMode>(e.Value?.ToString(), out var mode))
+        {
+            _filter.SortMode = mode;
+        }
+    }
+
+    private void ApplyQuickStatus(string statusKey)
+    {
+        if (statusKey == "ALL")
+        {
+            _filter.Status = "ALL";
+            _filter.Urgencia = "ALL";
+            _filter.UrgenciaGrupo = "ALL";
+        }
+        else
+        {
+            _filter.Status = _filter.Status == statusKey ? "ALL" : statusKey;
+        }
+    }
+
+    private void ToggleHighCriticalGroup() =>
+        _filter.UrgenciaGrupo = _filter.UrgenciaGrupo == "HIGH_CRIT" ? "ALL" : "HIGH_CRIT";
+
+    private void ToggleClientFilter(string cliente) =>
+        _filter.Cliente = string.Equals(_filter.Cliente, cliente, StringComparison.Ordinal) ? "ALL" : cliente;
+
+    private void ToggleServiceFilter(string servico) =>
+        _filter.Servico = string.Equals(_filter.Servico, servico, StringComparison.Ordinal) ? "ALL" : servico;
+
+    private void ToggleStatusFilter(string status) =>
+        _filter.Status = string.Equals(_filter.Status, status, StringComparison.Ordinal) ? "ALL" : status;
+
+    private void ToggleUrgencyFilter(string urgencia)
+    {
+        _filter.UrgenciaGrupo = "ALL";
+        _filter.Urgencia = string.Equals(_filter.Urgencia, urgencia, StringComparison.Ordinal) ? "ALL" : urgencia;
+    }
+
+    private void ResetFilters()
+    {
+        _filter.Cliente = "ALL";
+        _filter.Servico = "ALL";
+        _filter.Status = "ALL";
+        _filter.Urgencia = "ALL";
+        _filter.UrgenciaGrupo = "ALL";
+        _filter.SearchText = string.Empty;
+        _filter.SortMode = CarteiraSortMode.Alpha;
+    }
+
+    private void ToggleExpandClient(string cliente)
+    {
+        if (!_expandedClients.Add(cliente))
+        {
+            _expandedClients.Remove(cliente);
+        }
+    }
+
+    private async Task FocusClientFromAlertAsync(string cliente, string status)
+    {
+        _filter.Cliente = cliente;
+        _filter.Servico = "ALL";
+        _filter.Urgencia = "ALL";
+        _filter.UrgenciaGrupo = "ALL";
+        _filter.Status = status;
+
+        try
+        {
+            await JS.InvokeVoidAsync("movideskExec.scrollToElement", "raiox-section");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task ExportCsvAsync(IReadOnlyList<TicketCarteiraItem> tickets)
+    {
+        if (tickets.Count == 0) return;
+        string csv = CarteiraService.BuildCsv(tickets);
+        string stamp = GetReferenceDate().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        try
+        {
+            await JS.InvokeVoidAsync(
+                "movideskExec.downloadTextFile",
+                $"Carteira_Top3_Advice_{stamp}.csv",
+                csv,
+                "text/csv;charset=utf-8;");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task PrintPageAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("movideskExec.printPage");
+        }
+        catch (JSException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static List<ScatterTag> BuildNonOverlappingScatterTags(
+        IReadOnlyList<ClientPortfolioRow> items,
+        double maxX,
+        double maxY)
+    {
+        var tags = new List<ScatterTag>();
+        var offsets = new (double Dx, double Dy)[]
+        {
+            (0.0, 0.0),
+            (7.5, -2.5),
+            (-7.5, -2.5),
+            (0.0, -7.5),
+            (10.0, -6.5),
+            (0.0, 8.0),
+            (11.0, 2.0)
+        };
+
+        foreach (var item in items)
+        {
+            if (!item.AvgCadenceDays.HasValue) continue;
+            double cad = item.AvgCadenceDays.Value;
+            if (cad >= 15.0 && item.RecencyDays < 80 && item.PendingCount == 0) continue;
+
+            double baseX = 8.0 + (item.RecencyDays / maxX) * 84.0;
+            double baseY = 88.0 - (cad / maxY) * 74.0;
+
+            foreach (var (dx, dy) in offsets)
+            {
+                double candX = Math.Clamp(baseX + dx, 9.0, 89.0);
+                double candY = Math.Clamp(baseY + dy, 12.0, 90.0);
+
+                bool overlaps = tags.Any(t =>
+                    Math.Abs(t.LeftPct - candX) < 16.0 &&
+                    Math.Abs(t.TopPct - candY) < 6.8);
+
+                if (!overlaps)
+                {
+                    tags.Add(new ScatterTag($"{item.ShortName} ({Fmt1(cad)}d)", candX, candY));
+                    break;
+                }
+            }
+        }
+
+        return tags;
+    }
+
+    private static List<HighlightSegment> SplitForHighlight(string text, string query)
+    {
+        var result = new List<HighlightSegment>();
+        if (string.IsNullOrEmpty(text))
+        {
+            return result;
+        }
+
+        var needle = query.Trim();
+        if (string.IsNullOrEmpty(needle))
+        {
+            result.Add(new HighlightSegment(text, false));
+            return result;
+        }
+
+        int pos = 0;
+        while (pos < text.Length)
+        {
+            int idx = text.IndexOf(needle, pos, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                result.Add(new HighlightSegment(text[pos..], false));
+                break;
+            }
+
+            if (idx > pos)
+            {
+                result.Add(new HighlightSegment(text[pos..idx], false));
+            }
+
+            result.Add(new HighlightSegment(text.Substring(idx, needle.Length), true));
+            pos = idx + needle.Length;
+        }
+
+        return result;
+    }
+
+    private static int GetPlatformOrder(string servico) => servico switch
+    {
+        "EGUARDIAN" => 1,
+        "KN1" => 2,
+        "CCS" => 3,
+        "METIS (GESTOR DE RISCOS)" => 4,
+        "CORPORATIVO" => 5,
+        "Listas e CheckPEP" => 6,
+        _ => 99
+    };
+
+    private static string GetRecencyColor(int days) => days >= 80 ? "#EF4444" : days >= 30 ? "#F59E0B" : "#10B981";
+    private static string GetRecencyCssClass(int days) => days >= 80 ? "sem-red" : days >= 30 ? "sem-amber" : "sem-green";
+
+    private static string GetCadenceColor(double days) =>
+        days < 7.0 ? "#EF4444" :
+        days < 15.0 ? "#F97316" :
+        days <= 45.0 ? "#3B82F6" : "#64748B";
+
+    private static string GetStatusBadgeCssClass(string status) => status switch
+    {
+        "Resolvido" => "st-resolvido",
+        "Fechado" => "st-fechado",
+        "Aguardando" => "st-aguardando",
+        "Em atendimento" => "st-atendimento",
+        _ => "st-cancelado"
+    };
+
+    private static string GetUrgencyBadgeCssClass(string urgencia) => urgencia switch
+    {
+        "Crítica/Impeditiva" => "urg-critica",
+        "Alta" => "urg-alta",
+        "Média" => "urg-media",
+        _ => "urg-baixa"
+    };
+
+    private static string Inv(double value) => value.ToString("F2", CultureInfo.InvariantCulture);
+    private static string Fmt1(double value) => value.ToString("N1", CarteiraExecutivaService.PtBr);
+    private static string Fmt2(double value) => value.ToString("N2", CarteiraExecutivaService.PtBr);
+    private static string Fmt0Or1(double value) =>
+        Math.Abs(value - Math.Round(value)) < 0.0001
+            ? Math.Round(value).ToString("N0", CarteiraExecutivaService.PtBr)
+            : value.ToString("N1", CarteiraExecutivaService.PtBr);
+}

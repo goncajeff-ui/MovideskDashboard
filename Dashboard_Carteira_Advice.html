@@ -1,0 +1,2938 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ADVICE COMPLIANCE SOLUTIONS — Visão Executiva da Carteira (Top 3 por Cliente)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0B1120;
+      --surface: #111827;
+      --surface-2: #172033;
+      --surface-3: #1E293B;
+      --console: #070B14;
+      --border: #263248;
+      --border-strong: #334155;
+      --text: #F1F5F9;
+      --text-soft: #CBD5E1;
+      --muted: #94A3B8;
+      --gold: #C59217;
+      --gold-light: #FBBF24;
+      --navy: #0F435C;
+      --blue: #3B82F6;
+      --cyan: #06B6D4;
+      --emerald: #10B981;
+      --amber: #F59E0B;
+      --orange: #F97316;
+      --red: #EF4444;
+      --slate: #64748B;
+      --radius: 14px;
+      --shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: radial-gradient(circle at top right, #14223D 0%, var(--bg) 52%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1520px;
+      margin: 0 auto;
+      padding: 20px 22px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Header */
+    .exec-header {
+      background: linear-gradient(135deg, rgba(15, 67, 92, 0.48) 0%, rgba(17, 24, 39, 0.96) 58%);
+      border: 1px solid var(--border);
+      border-bottom: 2px solid var(--gold);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .brand-logo {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
+      background: linear-gradient(145deg, #093246, #0F435C);
+      border: 1.5px solid rgba(197, 146, 23, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    }
+
+    .brand-titles h1 {
+      margin: 0;
+      font-size: 1.3rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      color: #FFFFFF;
+    }
+
+    .brand-titles .gold-tag { color: #F5C451; }
+
+    .brand-subtitle {
+      margin: 4px 0 0;
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+
+    .header-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pill-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 650;
+      border: 1px solid var(--border-strong);
+      background: rgba(23, 32, 51, 0.9);
+      color: var(--text-soft);
+      white-space: nowrap;
+    }
+
+    .pill-gold {
+      border-color: rgba(197, 146, 23, 0.5);
+      background: rgba(197, 146, 23, 0.14);
+      color: #FCD34D;
+    }
+
+    .pill-cyan {
+      border-color: rgba(6, 182, 212, 0.4);
+      background: rgba(6, 182, 212, 0.12);
+      color: #67E8F9;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      display: inline-block;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 13px;
+      border-radius: 9px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+    }
+
+    .btn:hover { background: var(--surface-3); border-color: #475569; }
+    .btn:active { transform: translateY(1px); }
+
+    .btn-primary { background: var(--blue); border-color: var(--blue); color: #FFFFFF; }
+    .btn-primary:hover { background: #2563EB; border-color: #2563EB; }
+
+    .btn-gold {
+      background: rgba(197, 146, 23, 0.18);
+      border-color: rgba(197, 146, 23, 0.55);
+      color: #FCD34D;
+    }
+    .btn-gold:hover { background: rgba(197, 146, 23, 0.28); }
+
+    .select-compact {
+      padding: 7px 10px;
+      border-radius: 9px;
+      border: 1px solid var(--border-strong);
+      background: var(--console);
+      color: var(--text);
+      font-size: 0.81rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Section Headers */
+    .section-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      font-size: 0.96rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-soft);
+    }
+
+    .section-accent {
+      width: 4px;
+      height: 18px;
+      border-radius: 4px;
+      background: var(--gold);
+      display: inline-block;
+    }
+
+    /* KPI Strip (6 Cards) */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    @media (max-width: 1380px) { .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 760px) { .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 520px) { .kpi-grid { grid-template-columns: 1fr; } }
+
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 16px 15px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+
+    .kpi-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+
+    .kpi-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--kpi-color, var(--blue));
+    }
+
+    .kpi-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .kpi-title {
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      line-height: 1.3;
+    }
+
+    .kpi-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--kpi-bg, rgba(59, 130, 246, 0.14));
+      color: var(--kpi-color, var(--blue));
+      flex-shrink: 0;
+    }
+
+    .kpi-value {
+      font-size: 1.48rem;
+      font-weight: 800;
+      color: #FFFFFF;
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
+    }
+
+    .kpi-sub {
+      font-size: 0.78rem;
+      color: var(--text-soft);
+      line-height: 1.4;
+      margin-top: auto;
+    }
+
+    /* Charts Grid */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    @media (max-width: 1080px) { .charts-grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(23, 32, 51, 0.7);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-header h2 {
+      margin: 0;
+      font-size: 0.98rem;
+      font-weight: 700;
+      color: #FFFFFF;
+    }
+
+    .card-subtitle {
+      font-size: 0.79rem;
+      color: var(--muted);
+      margin-top: 2px;
+      display: block;
+    }
+
+    .card-body {
+      padding: 16px 18px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chart-box { position: relative; width: 100%; height: 340px; }
+    .chart-box-tall { height: 520px; }
+
+    .chart-legend-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 0.77rem;
+      color: var(--text-soft);
+      align-items: center;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid transparent;
+      user-select: none;
+    }
+    .legend-item:hover {
+      border-color: var(--border-strong);
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .legend-item.active-filter {
+      border-color: var(--gold);
+      background: rgba(197, 146, 23, 0.16);
+      color: #FFFFFF;
+    }
+
+    .legend-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    .segmented {
+      display: inline-flex;
+      background: var(--console);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .seg-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .seg-btn.active { background: var(--blue); color: #FFFFFF; }
+
+    /* Insights Grid */
+    .insights-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    @media (max-width: 1180px) { .insights-grid { grid-template-columns: 1fr; } }
+
+    .insight-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .insight-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .insight-title-wrap { display: flex; align-items: center; gap: 10px; }
+
+    .insight-badge-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .insight-head h3 { margin: 0; font-size: 0.94rem; font-weight: 700; color: #FFFFFF; }
+
+    .insight-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .insight-item {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.83rem;
+      color: var(--text-soft);
+      cursor: pointer;
+      transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+
+    .insight-item:hover { border-color: var(--blue); background: var(--surface-3); }
+    .insight-item strong { color: #FFFFFF; }
+
+    .insight-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    /* Filter Bar */
+    .filter-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    @media (max-width: 1200px) { .filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 760px) { .filter-grid { grid-template-columns: 1fr; } }
+
+    .field { display: flex; flex-direction: column; gap: 5px; }
+
+    .field label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .control {
+      width: 100%;
+      padding: 9px 11px;
+      border-radius: 9px;
+      border: 1px solid var(--border-strong);
+      background: var(--console);
+      color: var(--text);
+      font-size: 0.85rem;
+      font-family: inherit;
+    }
+
+    .control:focus { outline: 2px solid var(--blue); border-color: transparent; }
+
+    .filter-footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+
+    .quick-pills { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+    .filter-pill {
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+      color: var(--text-soft);
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.14s ease;
+    }
+    .filter-pill:hover { background: var(--surface-3); color: #FFFFFF; }
+    .filter-pill.active { background: var(--blue); border-color: var(--blue); color: #FFFFFF; }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.73rem;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+
+    .st-resolvido { background: rgba(16, 185, 129, 0.16); color: #34D399; border-color: rgba(16, 185, 129, 0.35); }
+    .st-fechado { background: rgba(6, 182, 212, 0.16); color: #22D3EE; border-color: rgba(6, 182, 212, 0.35); }
+    .st-aguardando { background: rgba(245, 158, 11, 0.18); color: #FBBF24; border-color: rgba(245, 158, 11, 0.42); }
+    .st-atendimento { background: rgba(59, 130, 246, 0.2); color: #60A5FA; border-color: rgba(59, 130, 246, 0.45); }
+    .st-cancelado { background: rgba(148, 163, 184, 0.16); color: #CBD5E1; border-color: rgba(148, 163, 184, 0.35); }
+
+    .urg-critica { background: rgba(239, 68, 68, 0.18); color: #F87171; border-color: rgba(239, 68, 68, 0.42); }
+    .urg-alta { background: rgba(249, 115, 22, 0.18); color: #FB923C; border-color: rgba(249, 115, 22, 0.42); }
+    .urg-media { background: rgba(59, 130, 246, 0.16); color: #93C5FD; border-color: rgba(59, 130, 246, 0.36); }
+    .urg-baixa { background: rgba(16, 185, 129, 0.14); color: #6EE7B7; border-color: rgba(16, 185, 129, 0.32); }
+
+    .svc-chip {
+      background: rgba(15, 67, 92, 0.45);
+      color: #BAE6FD;
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    .sem-green { background: rgba(16, 185, 129, 0.15); color: #34D399; border-color: rgba(16, 185, 129, 0.35); }
+    .sem-amber { background: rgba(245, 158, 11, 0.16); color: #FBBF24; border-color: rgba(245, 158, 11, 0.38); }
+    .sem-red { background: rgba(239, 68, 68, 0.16); color: #F87171; border-color: rgba(239, 68, 68, 0.42); }
+
+    /* Matrix 3x3 */
+    .matrix-list { display: flex; flex-direction: column; gap: 14px; }
+
+    .client-row-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .client-row-card.has-risk { border-color: rgba(239, 68, 68, 0.45); }
+
+    .client-row-head {
+      padding: 12px 16px;
+      background: rgba(23, 32, 51, 0.85);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .client-name-block { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .client-title { margin: 0; font-size: 1rem; font-weight: 750; color: #FFFFFF; }
+    .client-metrics-pills { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+    .tickets-3col {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px 16px;
+    }
+
+    @media (max-width: 1020px) { .tickets-3col { grid-template-columns: 1fr; } }
+
+    .ticket-slot {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 132px;
+    }
+
+    .ticket-slot.slot-pending {
+      border-color: rgba(245, 158, 11, 0.48);
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, var(--surface-2) 100%);
+    }
+
+    .ticket-slot.slot-empty {
+      border-style: dashed;
+      background: rgba(15, 23, 42, 0.35);
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-style: italic;
+    }
+
+    .slot-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.77rem;
+    }
+
+    .pos-label {
+      font-weight: 700;
+      color: var(--gold-light);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.71rem;
+    }
+
+    .ticket-id {
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-weight: 700;
+      color: #93C5FD;
+      font-size: 0.81rem;
+    }
+
+    .slot-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .slot-subject {
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.4;
+      word-break: break-word;
+      flex: 1;
+    }
+
+    .slot-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: auto; }
+
+    mark.hl {
+      background: rgba(251, 191, 36, 0.32);
+      color: #FEF08A;
+      padding: 0 2px;
+      border-radius: 3px;
+    }
+
+    /* Expandable Table Mode */
+    .table-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow-x: auto;
+      box-shadow: var(--shadow);
+    }
+
+    table.raiox-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+
+    table.raiox-table th {
+      text-align: left;
+      padding: 11px 14px;
+      background: rgba(23, 32, 51, 0.9);
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border);
+    }
+
+    table.raiox-table td {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      color: var(--text-soft);
+    }
+
+    table.raiox-table tr.client-summary-row { cursor: pointer; transition: background-color 0.12s ease; }
+    table.raiox-table tr.client-summary-row:hover { background: rgba(59, 130, 246, 0.08); }
+    table.raiox-table tr.detail-row td { background: var(--console); padding: 0; }
+
+    .empty-state {
+      background: var(--surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      padding: 36px 24px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .svg-chart-wrap { width: 100%; height: 100%; overflow-y: auto; position: relative; }
+
+    .footer-note {
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+
+    code {
+      font-family: "Cascadia Code", Consolas, monospace;
+      background: rgba(148, 163, 184, 0.14);
+      padding: 1px 5px;
+      border-radius: 5px;
+      color: #CBD5E1;
+      font-size: 0.86em;
+    }
+
+    @media print {
+      body { background: #0B1120 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .header-actions, .filter-panel { display: none !important; }
+      .container { max-width: 100%; padding: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- ================================================================
+         1. CABEÇALHO EXECUTIVO ADVICE COMPLIANCE SOLUTIONS
+         ================================================================ -->
+    <header class="exec-header">
+      <div class="brand-row">
+        <div class="brand-logo" aria-hidden="true">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#F5C451" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L3 6.5v5.5c0 5.25 3.85 9.95 9 11 5.15-1.05 9-5.75 9-11V6.5L12 2z"/>
+            <path d="M9 12l2 2 4-4" stroke="#38BDF8"/>
+          </svg>
+        </div>
+        <div class="brand-titles">
+          <h1><span class="gold-tag">ADVICE COMPLIANCE SOLUTIONS</span> — Inteligência de Sustentação &amp; Saúde da Carteira</h1>
+          <p class="brand-subtitle" id="dynamicSubtitle">
+            Análise dos Últimos 3 Atendimentos por Cliente PJ | Responsável: Jefferson Gonçalves Cordeiro
+          </p>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <span class="pill-badge pill-gold"><span class="dot"></span> Equipe: Sustentação e-Guardian RJ</span>
+        <span class="pill-badge pill-cyan" id="scopePill">21 Clientes PJ · 59 Tickets</span>
+        <div class="header-actions">
+          <select id="refDateSelect" class="select-compact" title="Data de referência para cálculo de Recência e Pendências Envelhecidas">
+            <option value="2026-11-15">Corte Planilha (15/11/2026)</option>
+            <option value="today">Data Atual (Hoje)</option>
+          </select>
+          <button type="button" class="btn btn-gold" id="btnExportCsv" title="Exportar recorte atual para CSV">Exportar CSV</button>
+          <button type="button" class="btn" id="btnPrint" title="Imprimir ou Salvar em PDF">Imprimir / PDF</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================================================================
+         2. LINHA DE 6 KPIS EXECUTIVOS NO TOPO
+         ================================================================ -->
+    <section aria-label="Indicadores Executivos">
+      <div class="kpi-grid" id="kpiGrid"></div>
+    </section>
+
+    <!-- ================================================================
+         3. GRÁFICOS GERENCIAIS INTERATIVOS (GRID CENTRAL 2x2)
+         ================================================================ -->
+    <section aria-label="Gráficos Gerenciais">
+      <div class="section-title-row" style="margin-bottom: 12px;">
+        <h2 class="section-heading"><span class="section-accent"></span> Painel Analítico da Carteira</h2>
+        <span class="pill-badge" style="font-size:0.75rem;">Clique em qualquer barra, fatia ou legenda para filtrar dinamicamente</span>
+      </div>
+      <div class="charts-grid">
+        <article class="card">
+          <div class="card-header">
+            <div>
+              <h2>1. Volume e Severidade por Plataforma (Serviço x Urgência)</h2>
+              <span class="card-subtitle">Distribuição dos atendimentos por produto segmentada pela criticidade</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-legend-bar" id="legendChart1"></div>
+            <div class="chart-box" id="wrapChart1"><canvas id="chartPlatform"></canvas></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <div>
+              <h2>3. Distribuição de Status da Carteira</h2>
+              <span class="card-subtitle">Proporção entre concluídos, cancelados e fila ativa em aberto</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-legend-bar" id="legendChart3"></div>
+            <div class="chart-box" id="wrapChart3"><canvas id="chartStatus"></canvas></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <div>
+              <h2>2. Termômetro de Recência por Cliente (Posição 1)</h2>
+              <span class="card-subtitle">Dias desde a abertura do último chamado · Verde (&lt;30d) · Amarelo (30–79d) · Vermelho (&ge;80d)</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-legend-bar">
+              <span class="legend-item"><span class="legend-swatch" style="background:#10B981"></span> Ativo (&lt; 30d)</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span> Atenção (30–79d)</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#EF4444"></span> Silencioso / Risco (&ge; 80d)</span>
+            </div>
+            <div class="chart-box chart-box-tall" id="wrapChart2"><canvas id="chartRecency"></canvas></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <div>
+              <h2>4. Pressão de Recorrência por Conta (Intervalo Médio)</h2>
+              <span class="card-subtitle">Intervalo médio em dias entre os 3 últimos tickets · Rajadas curtas (&lt;15d) no topo</span>
+            </div>
+            <div class="segmented" role="group" aria-label="Modo Gráfico 4">
+              <button type="button" class="seg-btn active" id="btnCadenceBar">Barras</button>
+              <button type="button" class="seg-btn" id="btnCadenceScatter">Dispersão</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="chart-legend-bar">
+              <span class="legend-item"><span class="legend-swatch" style="background:#EF4444"></span> Rajada Crítica (&lt; 7d)</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#F97316"></span> Pressão Alta (7–14,9d)</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#3B82F6"></span> Normal (15–45d)</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:#64748B"></span> Espaçado (&gt; 45d)</span>
+            </div>
+            <div class="chart-box chart-box-tall" id="wrapChart4"><canvas id="chartCadence"></canvas></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ================================================================
+         4. PAINEL DE ALERTAS DE GESTÃO (DIAGNÓSTICO AUTOMÁTICO)
+         ================================================================ -->
+    <section aria-label="Diagnóstico Executivo de Reincidência e Risco">
+      <div class="section-title-row" style="margin-bottom: 12px;">
+        <h2 class="section-heading"><span class="section-accent"></span> Diagnóstico Executivo de Reincidência e Risco</h2>
+        <span class="pill-badge" style="font-size:0.75rem;">Clique em qualquer alerta para filtrar o cliente no Raio-X 3x3</span>
+      </div>
+      <div class="insights-grid" id="insightsGrid"></div>
+    </section>
+
+    <!-- ================================================================
+         5. FILTROS DINÂMICOS + MATRIZ INTERATIVA "RAIO-X 3x3 POR CLIENTE"
+         ================================================================ -->
+    <section id="raioxSection" aria-label="Raio-X 3x3 por Cliente">
+      <div class="section-title-row" style="margin-bottom: 12px;">
+        <h2 class="section-heading"><span class="section-accent"></span> Matriz Interativa "Raio-X 3x3 por Cliente"</h2>
+        <div class="header-actions">
+          <div class="segmented" role="group" aria-label="Modo de Visualização Raio-X">
+            <button type="button" class="seg-btn active" id="btnViewCards">Cards 3x3</button>
+            <button type="button" class="seg-btn" id="btnViewTable">Tabela Expansível</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="filter-panel" style="margin-bottom: 16px;">
+        <div class="filter-grid">
+          <div class="field">
+            <label for="filterCliente">Cliente (PJ)</label>
+            <select id="filterCliente" class="control"></select>
+          </div>
+          <div class="field">
+            <label for="filterServico">Serviço / Plataforma</label>
+            <select id="filterServico" class="control"></select>
+          </div>
+          <div class="field">
+            <label for="filterStatus">Status</label>
+            <select id="filterStatus" class="control">
+              <option value="ALL">Todos os Status</option>
+              <option value="PENDING">Apenas Pendentes (Aguardando / Em atend.)</option>
+              <option value="DONE">Apenas Concluídos (Resolvido / Fechado)</option>
+              <option value="Resolvido">Resolvido</option>
+              <option value="Fechado">Fechado</option>
+              <option value="Aguardando">Aguardando</option>
+              <option value="Em atendimento">Em atendimento</option>
+              <option value="Cancelado">Cancelado</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filterUrgencia">Urgência</label>
+            <select id="filterUrgencia" class="control">
+              <option value="ALL">Todas as Urgências</option>
+              <option value="Crítica/Impeditiva">Crítica/Impeditiva</option>
+              <option value="Alta">Alta</option>
+              <option value="Média">Média</option>
+              <option value="Baixa">Baixa</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filterSearch">Busca no Assunto / #Ticket</label>
+            <input id="filterSearch" type="search" class="control" placeholder="Ex.: Sisbajud, Regra C07, MB21, 54887..." />
+          </div>
+        </div>
+
+        <div class="filter-footer">
+          <div class="quick-pills" id="statusQuickPills">
+            <span style="font-size:0.76rem;color:var(--muted);font-weight:700;margin-right:4px;">ATALHOS:</span>
+            <button type="button" class="filter-pill active" data-quick-status="ALL">Todos (59)</button>
+            <button type="button" class="filter-pill" data-quick-status="PENDING">Apenas Pendentes (10)</button>
+            <button type="button" class="filter-pill" data-quick-status="DONE">Apenas Concluídos (47)</button>
+            <button type="button" class="filter-pill" data-quick-urg="HIGH_CRIT">Alta / Crítica (34)</button>
+          </div>
+
+          <div class="header-actions">
+            <select id="sortSelect" class="select-compact" title="Ordenação dos Clientes">
+              <option value="ALPHA">Ordenar: Cliente (A–Z)</option>
+              <option value="PENDING_FIRST">Ordenar: Mais Pendentes Primeiro</option>
+              <option value="RECENCY_DESC">Ordenar: Maior Silêncio (Recência)</option>
+              <option value="CADENCE_ASC">Ordenar: Menor Cadência (Rajadas)</option>
+            </select>
+            <button type="button" class="btn" id="btnResetFilters">Limpar Filtros</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="matrixContainer"></div>
+    </section>
+
+    <footer class="footer-note">
+      ADVICE COMPLIANCE SOLUTIONS · Contingência Executiva Standalone (100% Offline, Sem Servidor Web / WSL / Banco) · Base: <code>Ultimos Atendimentos Por Cliente.xlsx</code> (59 tickets · 21 clientes PJ · Sustentação e-Guardian RJ)
+    </footer>
+  </div>
+
+  <script>
+    // =========================================================================
+    // DADOS EMBUTIDOS DA PLANILHA: "Ultimos Atendimentos Por Cliente.xlsx"
+    // 59 Tickets | 21 Clientes PJ | Equipe: Sustentação e-Guardian RJ
+    // Analista Responsável: Jefferson Gonçalves Cordeiro
+    // =========================================================================
+    const EMBEDDED_TICKETS = [
+  {
+    "cliente": "Acg",
+    "posicao": 1,
+    "ticketId": 53458,
+    "dataAbertura": "2026-10-21T17:53:07",
+    "servico": "EGUARDIAN",
+    "assunto": "Delei de informações",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Acg",
+    "posicao": 2,
+    "ticketId": 51300,
+    "dataAbertura": "2026-09-28T10:51:11",
+    "servico": "EGUARDIAN",
+    "assunto": "Alertas Regra MF20",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Acg",
+    "posicao": 3,
+    "ticketId": 50720,
+    "dataAbertura": "2026-09-21T09:36:53",
+    "servico": "EGUARDIAN",
+    "assunto": "Serviços com Falhas",
+    "status": "Fechado",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "AGORACRED",
+    "posicao": 1,
+    "ticketId": 52623,
+    "dataAbertura": "2026-10-13T15:41:00",
+    "servico": "EGUARDIAN",
+    "assunto": "Problema no EGUARDIAN - Advice - Abertura de Chamada para Feito Conferido",
+    "status": "Aguardando",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "AGORACRED",
+    "posicao": 2,
+    "ticketId": 38786,
+    "dataAbertura": "2026-05-08T15:44:14",
+    "servico": "EGUARDIAN",
+    "assunto": "Lentidão e timeout em algumas telas do e-guardian",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Apex",
+    "posicao": 1,
+    "ticketId": 51630,
+    "dataAbertura": "2026-09-30T12:25:14",
+    "servico": "KN1",
+    "assunto": "Erro - Fases KN1",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Apex",
+    "posicao": 2,
+    "ticketId": 48682,
+    "dataAbertura": "2026-08-28T10:28:40",
+    "servico": "EGUARDIAN",
+    "assunto": "Eguardian com diversas falhas",
+    "status": "Fechado",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Apex",
+    "posicao": 3,
+    "ticketId": 48361,
+    "dataAbertura": "2026-08-26T09:34:15",
+    "servico": "CORPORATIVO",
+    "assunto": "Dúvidas sobre o cadastro de usuários e permissão de acesso",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Ativa Investimentos",
+    "posicao": 1,
+    "ticketId": 54838,
+    "dataAbertura": "2026-11-09T17:38:00",
+    "servico": "EGUARDIAN",
+    "assunto": "Dúvidas - Regra MB08",
+    "status": "Aguardando",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Ativa Investimentos",
+    "posicao": 2,
+    "ticketId": 54816,
+    "dataAbertura": "2026-11-09T16:00:05",
+    "servico": "EGUARDIAN",
+    "assunto": "Ajuste -  MB08",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Ativa Investimentos",
+    "posicao": 3,
+    "ticketId": 54634,
+    "dataAbertura": "2026-11-06T09:48:56",
+    "servico": "EGUARDIAN",
+    "assunto": "Dúvidas - Regra MF71",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Banco Arbi",
+    "posicao": 1,
+    "ticketId": 53524,
+    "dataAbertura": "2026-10-22T12:09:54",
+    "servico": "KN1",
+    "assunto": "Cadastros parados nas fases iniciais",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Banco Arbi",
+    "posicao": 2,
+    "ticketId": 53217,
+    "dataAbertura": "2026-10-20T09:58:05",
+    "servico": "KN1",
+    "assunto": "Cadastros parados no sistema",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Banco Arbi",
+    "posicao": 3,
+    "ticketId": 52451,
+    "dataAbertura": "2026-10-08T17:49:02",
+    "servico": "KN1",
+    "assunto": "8 Processos parados na fase inicial de dados cadastrais sem avançar",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "BGC Partners",
+    "posicao": 1,
+    "ticketId": 52487,
+    "dataAbertura": "2026-10-09T12:26:18",
+    "servico": "KN1",
+    "assunto": "Suporte KN1_ ERRO NAS FASES",
+    "status": "Aguardando",
+    "urgencia": "Baixa",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "BGC Partners",
+    "posicao": 2,
+    "ticketId": 51035,
+    "dataAbertura": "2026-09-23T15:36:21",
+    "servico": "EGUARDIAN",
+    "assunto": "Inconsistências | BSM - Arquivos e Trilhas",
+    "status": "Resolvido",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "BGC Partners",
+    "posicao": 3,
+    "ticketId": 50130,
+    "dataAbertura": "2026-09-14T15:39:04",
+    "servico": "EGUARDIAN",
+    "assunto": "Suporte para Inativação de Cliente",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Bnymellon",
+    "posicao": 1,
+    "ticketId": 54981,
+    "dataAbertura": "2026-11-11T06:05:42",
+    "servico": "METIS (GESTOR DE RISCOS)",
+    "assunto": "Erro no serviço 145",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Bnymellon",
+    "posicao": 2,
+    "ticketId": 54279,
+    "dataAbertura": "2026-10-30T17:12:41",
+    "servico": "METIS (GESTOR DE RISCOS)",
+    "assunto": "INC17605965 - Inconsistência na composição do risk rating de fundos",
+    "status": "Aguardando",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Bnymellon",
+    "posicao": 3,
+    "ticketId": 54182,
+    "dataAbertura": "2026-10-30T08:40:37",
+    "servico": "METIS (GESTOR DE RISCOS)",
+    "assunto": "Cliente reativado na base do eGuardian continuou inativado na base do METIS",
+    "status": "Aguardando",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CM Capital",
+    "posicao": 1,
+    "ticketId": 54887,
+    "dataAbertura": "2026-11-10T11:26:48",
+    "servico": "EGUARDIAN",
+    "assunto": "Alertas MF65 - Gerados Fora do Prazo",
+    "status": "Aguardando",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CM Capital",
+    "posicao": 2,
+    "ticketId": 54864,
+    "dataAbertura": "2026-11-10T09:42:10",
+    "servico": "EGUARDIAN",
+    "assunto": "Alertas MB21 Indevidos - IP \"FIX\"",
+    "status": "Em atendimento",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CM Capital",
+    "posicao": 3,
+    "ticketId": 53622,
+    "dataAbertura": "2026-10-23T11:14:45",
+    "servico": "EGUARDIAN",
+    "assunto": "Serviços com Lentidão ou Parados",
+    "status": "Resolvido",
+    "urgencia": "Baixa",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CODEPE",
+    "posicao": 1,
+    "ticketId": 48482,
+    "dataAbertura": "2026-08-27T08:56:12",
+    "servico": "CCS",
+    "assunto": "Inativação de cliente.",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CODEPE",
+    "posicao": 2,
+    "ticketId": 46308,
+    "dataAbertura": "2026-08-05T10:51:25",
+    "servico": "CCS",
+    "assunto": "envios CCS",
+    "status": "Fechado",
+    "urgencia": "Baixa",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CODEPE",
+    "posicao": 3,
+    "ticketId": 36366,
+    "dataAbertura": "2026-04-07T10:06:31",
+    "servico": "CCS",
+    "assunto": "Analise de envios CCS.",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CREDIFIT",
+    "posicao": 1,
+    "ticketId": 54580,
+    "dataAbertura": "2026-11-05T15:32:05",
+    "servico": "Listas e CheckPEP",
+    "assunto": "Lista restritiva - Impedir abertura de conta PF e PJ",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CREDIFIT",
+    "posicao": 2,
+    "ticketId": 54121,
+    "dataAbertura": "2026-10-29T13:17:26",
+    "servico": "CORPORATIVO",
+    "assunto": "Não consigo acessar a conta da Advice e o email não chega para recuperar a senha",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "CREDIFIT",
+    "posicao": 3,
+    "ticketId": 53422,
+    "dataAbertura": "2026-10-21T15:04:58",
+    "servico": "KN1",
+    "assunto": "Credifit: manual do webservice de integração (wsIntegracaoRISC)",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "FONTECRED - SOCIEDADE DE CREDITO DIRETO S/A",
+    "posicao": 1,
+    "ticketId": 54313,
+    "dataAbertura": "2026-11-03T09:21:28",
+    "servico": "EGUARDIAN",
+    "assunto": "Suporte",
+    "status": "Cancelado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "FONTECRED - SOCIEDADE DE CREDITO DIRETO S/A",
+    "posicao": 2,
+    "ticketId": 54303,
+    "dataAbertura": "2026-11-03T08:14:51",
+    "servico": "EGUARDIAN",
+    "assunto": "Suporte",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "FONTECRED - SOCIEDADE DE CREDITO DIRETO S/A",
+    "posicao": 3,
+    "ticketId": 48991,
+    "dataAbertura": "2026-09-01T15:14:23",
+    "servico": "EGUARDIAN",
+    "assunto": "Suporte",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "GerenciaNet",
+    "posicao": 1,
+    "ticketId": 55085,
+    "dataAbertura": "2026-11-11T16:33:14",
+    "servico": "EGUARDIAN",
+    "assunto": "Acesso Eguardian",
+    "status": "Aguardando",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "GerenciaNet",
+    "posicao": 2,
+    "ticketId": 53415,
+    "dataAbertura": "2026-10-21T14:37:40",
+    "servico": "EGUARDIAN",
+    "assunto": "Lentidão EGUARDIAN - Novo chamado",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "GerenciaNet",
+    "posicao": 3,
+    "ticketId": 52069,
+    "dataAbertura": "2026-10-06T10:15:15",
+    "servico": "KN1",
+    "assunto": "Processo KYS - Idade do beneficiário",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "HDI Seguros",
+    "posicao": 1,
+    "ticketId": 52903,
+    "dataAbertura": "2026-10-15T17:19:08",
+    "servico": "EGUARDIAN",
+    "assunto": "Regra SE07 - CPF do Executor sem 0 a esqueda",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "HDI Seguros",
+    "posicao": 2,
+    "ticketId": 52764,
+    "dataAbertura": "2026-10-14T15:27:29",
+    "servico": "EGUARDIAN",
+    "assunto": "Problema Integração - Coberturas",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "HDI Seguros",
+    "posicao": 3,
+    "ticketId": 50986,
+    "dataAbertura": "2026-09-23T10:22:03",
+    "servico": "EGUARDIAN",
+    "assunto": "Não arquivamento da SE05 de forma automática",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "HEDGE",
+    "posicao": 1,
+    "ticketId": 28448,
+    "dataAbertura": "2025-10-15T17:33:02",
+    "servico": "CCS",
+    "assunto": "Erro ao fazer o login no sistema.",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "LIBERTY",
+    "posicao": 1,
+    "ticketId": 54096,
+    "dataAbertura": "2026-10-29T10:59:24",
+    "servico": "EGUARDIAN",
+    "assunto": "Fragilidade na Regra C07",
+    "status": "Cancelado",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "LIBERTY",
+    "posicao": 2,
+    "ticketId": 54034,
+    "dataAbertura": "2026-10-28T15:41:35",
+    "servico": "EGUARDIAN",
+    "assunto": "Fragilidade na Regra C07",
+    "status": "Aguardando",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "LIBERTY",
+    "posicao": 3,
+    "ticketId": 50898,
+    "dataAbertura": "2026-09-22T14:15:00",
+    "servico": "EGUARDIAN",
+    "assunto": "Fragilidades nas Regras de Monitoramento",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Lumina Corretora de Cambio",
+    "posicao": 1,
+    "ticketId": 52609,
+    "dataAbertura": "2026-10-13T13:19:25",
+    "servico": "EGUARDIAN",
+    "assunto": "ALERTAS DO e-GUARDIAN 2025 + Regras e Listas",
+    "status": "Resolvido",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Lumina Corretora de Cambio",
+    "posicao": 2,
+    "ticketId": 49452,
+    "dataAbertura": "2026-09-08T10:42:26",
+    "servico": "EGUARDIAN",
+    "assunto": "Desinstalação do sistema por Cancelamento",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Lumina Corretora de Cambio",
+    "posicao": 3,
+    "ticketId": 40973,
+    "dataAbertura": "2026-06-08T10:56:18",
+    "servico": "EGUARDIAN",
+    "assunto": "Dúvida sobre TI",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "MAG",
+    "posicao": 1,
+    "ticketId": 54695,
+    "dataAbertura": "2026-11-06T16:49:12",
+    "servico": "EGUARDIAN",
+    "assunto": "Avaliar monitoramento de Parceiros, Fornecedores, Colaboradores e Terceiros no e-Guardian",
+    "status": "Resolvido",
+    "urgencia": "Baixa",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "MAG",
+    "posicao": 2,
+    "ticketId": 52910,
+    "dataAbertura": "2026-10-15T17:45:06",
+    "servico": "Listas e CheckPEP",
+    "assunto": "Representante PEP (Sem ocorrência eGuardian)",
+    "status": "Aguardando",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "MAG",
+    "posicao": 3,
+    "ticketId": 50363,
+    "dataAbertura": "2026-09-16T11:45:34",
+    "servico": "EGUARDIAN",
+    "assunto": "Solicitação de Apoio para Configuração dos Grupos de Atuação",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Nomad",
+    "posicao": 1,
+    "ticketId": 55035,
+    "dataAbertura": "2026-11-11T11:29:49",
+    "servico": "CCS",
+    "assunto": "Erro no AJUD309",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Nomad",
+    "posicao": 2,
+    "ticketId": 55013,
+    "dataAbertura": "2026-11-11T10:07:35",
+    "servico": "CCS",
+    "assunto": "Expiração de senha STA",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Nomad",
+    "posicao": 3,
+    "ticketId": 54541,
+    "dataAbertura": "2026-11-05T12:41:21",
+    "servico": "CCS",
+    "assunto": "[Sisbajud] Status de retorno (AJUD308/310/331) e alinhamento de prazo (30/10)",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "RJ Investimentos",
+    "posicao": 1,
+    "ticketId": 54942,
+    "dataAbertura": "2026-11-10T15:35:24",
+    "servico": "EGUARDIAN",
+    "assunto": "REUNIÃO APOIO SISTEMA",
+    "status": "Resolvido",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "RJ Investimentos",
+    "posicao": 2,
+    "ticketId": 53426,
+    "dataAbertura": "2026-10-21T15:35:14",
+    "servico": "EGUARDIAN",
+    "assunto": "Dúvidas - Sistema e-Guardian",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Sol Corretora de Cambio",
+    "posicao": 1,
+    "ticketId": 38221,
+    "dataAbertura": "2026-04-30T15:31:02",
+    "servico": "EGUARDIAN",
+    "assunto": "Desbloqueio e recuperação de Senha",
+    "status": "Fechado",
+    "urgencia": "Crítica/Impeditiva",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Sol Corretora de Cambio",
+    "posicao": 2,
+    "ticketId": 33442,
+    "dataAbertura": "2026-02-18T14:54:33",
+    "servico": "EGUARDIAN",
+    "assunto": "Configurar Siscoaf",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "Sol Corretora de Cambio",
+    "posicao": 3,
+    "ticketId": 33440,
+    "dataAbertura": "2026-02-18T14:53:28",
+    "servico": "EGUARDIAN",
+    "assunto": "Puxar relatórios monitoramento de alertas",
+    "status": "Fechado",
+    "urgencia": "Alta",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "STELLANTIS FIAT",
+    "posicao": 1,
+    "ticketId": 51481,
+    "dataAbertura": "2026-09-29T15:22:34",
+    "servico": "METIS (GESTOR DE RISCOS)",
+    "assunto": "Falha no start de serviços após instalação",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "STELLANTIS FIAT",
+    "posicao": 2,
+    "ticketId": 50982,
+    "dataAbertura": "2026-09-23T10:21:00",
+    "servico": "EGUARDIAN",
+    "assunto": "Atualização versão GUA_V008.9.9",
+    "status": "Resolvido",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  },
+  {
+    "cliente": "STELLANTIS FIAT",
+    "posicao": 3,
+    "ticketId": 32059,
+    "dataAbertura": "2026-01-19T13:58:58",
+    "servico": "EGUARDIAN",
+    "assunto": "Painel de monitoramento filtrando incorretamente",
+    "status": "Fechado",
+    "urgencia": "Média",
+    "equipe": "Sustentação e-Guardian RJ",
+    "analista": "Jefferson Gonçalves Cordeiro"
+  }
+];
+
+    const STATUS_COLORS = {
+      "Resolvido": "#10B981",
+      "Fechado": "#06B6D4",
+      "Aguardando": "#F59E0B",
+      "Em atendimento": "#3B82F6",
+      "Cancelado": "#94A3B8"
+    };
+
+    const PLATFORM_PRIORITY = {
+      "EGUARDIAN": 1,
+      "KN1": 2,
+      "CCS": 3,
+      "METIS (GESTOR DE RISCOS)": 4,
+      "CORPORATIVO": 5,
+      "Listas e CheckPEP": 6
+    };
+
+    const URGENCY_ORDER = ["Crítica/Impeditiva", "Alta", "Média", "Baixa"];
+    const URGENCY_COLORS = {
+      "Crítica/Impeditiva": "#EF4444",
+      "Alta": "#F97316",
+      "Média": "#3B82F6",
+      "Baixa": "#10B981"
+    };
+
+    const state = {
+      cliente: "ALL",
+      servico: "ALL",
+      status: "ALL",
+      urgencia: "ALL",
+      urgGroup: "ALL",
+      search: "",
+      sort: "ALPHA",
+      viewMode: "CARDS",
+      cadenceMode: "BAR",
+      refMode: "2026-11-15",
+      expandedClients: new Set()
+    };
+
+    const charts = { platform: null, status: null, recency: null, cadence: null };
+
+    function escapeHtml(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function highlightText(text, query) {
+      const safe = escapeHtml(text);
+      if (!query || !query.trim()) return safe;
+      const q = query.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return safe.replace(new RegExp(`(${q})`, "gi"), '<mark class="hl">$1</mark>');
+    }
+
+    function parseIsoDate(iso) {
+      const [datePart, timePart] = iso.split("T");
+      const [y, m, d] = datePart.split("-").map(Number);
+      const [hh, mm, ss] = (timePart || "00:00:00").split(":").map(Number);
+      return new Date(y, m - 1, d, hh, mm, ss);
+    }
+
+    function getRefDate() {
+      if (state.refMode === "2026-11-15") {
+        return new Date(2026, 10, 15, 23, 59, 59);
+      }
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    }
+
+    function dayDiff(dateObj, refDateObj) {
+      const d1 = Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+      const d2 = Date.UTC(refDateObj.getFullYear(), refDateObj.getMonth(), refDateObj.getDate());
+      return Math.max(0, Math.round((d2 - d1) / 86400000));
+    }
+
+    function formatDateBr(iso) {
+      const dt = parseIsoDate(iso);
+      const pad = n => String(n).padStart(2, "0");
+      return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    }
+
+    function formatNumBr(val, decimals = 2) {
+      return val.toLocaleString("pt-BR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function median(arr) {
+      if (!arr.length) return null;
+      const s = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+    }
+
+    function mean(arr) {
+      if (!arr.length) return null;
+      return arr.reduce((acc, v) => acc + v, 0) / arr.length;
+    }
+
+    function isPendingStatus(s) { return s === "Aguardando" || s === "Em atendimento"; }
+    function isDoneStatus(s) { return s === "Resolvido" || s === "Fechado"; }
+
+    function getStatusBadgeClass(s) {
+      switch (s) {
+        case "Resolvido": return "st-resolvido";
+        case "Fechado": return "st-fechado";
+        case "Aguardando": return "st-aguardando";
+        case "Em atendimento": return "st-atendimento";
+        default: return "st-cancelado";
+      }
+    }
+
+    function getUrgencyBadgeClass(u) {
+      switch (u) {
+        case "Crítica/Impeditiva": return "urg-critica";
+        case "Alta": return "urg-alta";
+        case "Média": return "urg-media";
+        default: return "urg-baixa";
+      }
+    }
+
+    function getRecencyColor(days) {
+      if (days >= 80) return "#EF4444";
+      if (days >= 30) return "#F59E0B";
+      return "#10B981";
+    }
+
+    function getRecencyClass(days) {
+      if (days >= 80) return "sem-red";
+      if (days >= 30) return "sem-amber";
+      return "sem-green";
+    }
+
+    function getCadenceColor(days) {
+      if (days < 7) return "#EF4444";
+      if (days < 15) return "#F97316";
+      if (days <= 45) return "#3B82F6";
+      return "#64748B";
+    }
+
+    function shortClientName(name) {
+      if (name === "FONTECRED - SOCIEDADE DE CREDITO DIRETO S/A") return "FONTECRED SCD";
+      if (name === "Lumina Corretora de Cambio") return "Lumina Corretora";
+      if (name === "Sol Corretora de Cambio") return "Sol Corretora";
+      return name;
+    }
+
+    function getFilteredTickets() {
+      const q = state.search.trim().toLowerCase();
+      return EMBEDDED_TICKETS.filter(t => {
+        if (state.cliente !== "ALL" && t.cliente !== state.cliente) return false;
+        if (state.servico !== "ALL" && t.servico !== state.servico) return false;
+        if (state.status === "PENDING" && !isPendingStatus(t.status)) return false;
+        else if (state.status === "DONE" && !isDoneStatus(t.status)) return false;
+        else if (state.status !== "ALL" && state.status !== "PENDING" && state.status !== "DONE" && t.status !== state.status) return false;
+
+        if (state.urgGroup === "HIGH_CRIT") {
+          if (t.urgencia !== "Alta" && t.urgencia !== "Crítica/Impeditiva") return false;
+        } else if (state.urgencia !== "ALL" && t.urgencia !== state.urgencia) {
+          return false;
+        }
+
+        if (q) {
+          const hay = `${t.assunto} ${t.ticketId} ${t.cliente} ${t.servico}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+
+    function computeDashboardData(tickets) {
+      const refDate = getRefDate();
+      const total = tickets.length;
+      const byClient = new Map();
+
+      tickets.forEach(t => {
+        if (!byClient.has(t.cliente)) byClient.set(t.cliente, []);
+        byClient.get(t.cliente).push(t);
+      });
+
+      const clientEntries = [];
+      const allIntervals = [];
+      const recencyDaysAll = [];
+
+      for (const [cliente, list] of byClient.entries()) {
+        const sorted = [...list].sort((a, b) => a.posicao - b.posicao);
+        const latestTicket = sorted[0];
+        const latestDate = parseIsoDate(latestTicket.dataAbertura);
+        const recencyDays = dayDiff(latestDate, refDate);
+        recencyDaysAll.push(recencyDays);
+
+        const intervals = [];
+        for (let i = 0; i < sorted.length - 1; i++) {
+          const dNew = parseIsoDate(sorted[i].dataAbertura);
+          const dOld = parseIsoDate(sorted[i + 1].dataAbertura);
+          const diffDays = Math.max(0, (dNew.getTime() - dOld.getTime()) / 86400000);
+          intervals.push(diffDays);
+          allIntervals.push(diffDays);
+        }
+
+        const avgCadence = intervals.length ? mean(intervals) : null;
+        const pendingCount = sorted.filter(x => isPendingStatus(x.status)).length;
+        const hasContractRisk = sorted.some(x => /cancelamento|desinstala/i.test(x.assunto));
+
+        clientEntries.push({
+          cliente,
+          shortName: shortClientName(cliente),
+          tickets: sorted,
+          recencyDays,
+          latestTicket,
+          intervals,
+          avgCadence,
+          pendingCount,
+          hasContractRisk
+        });
+      }
+
+      let c3 = 0, c2 = 0, c1 = 0;
+      for (const c of clientEntries) {
+        if (c.tickets.length >= 3) c3++;
+        else if (c.tickets.length === 2) c2++;
+        else c1++;
+      }
+
+      const statusCounts = { "Resolvido": 0, "Fechado": 0, "Aguardando": 0, "Cancelado": 0, "Em atendimento": 0 };
+      tickets.forEach(t => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
+
+      const doneCount = statusCounts["Resolvido"] + statusCounts["Fechado"];
+      const donePct = total ? (doneCount * 100) / total : 0;
+
+      const pendingTickets = tickets.filter(t => isPendingStatus(t.status));
+      const pendingClients = new Set(pendingTickets.map(t => t.cliente));
+      const inProgressTickets = pendingTickets.filter(t => t.status === "Em atendimento");
+      const waitingTickets = pendingTickets.filter(t => t.status === "Aguardando");
+      const pendingPct = total ? (pendingTickets.length * 100) / total : 0;
+
+      const critCount = tickets.filter(t => t.urgencia === "Crítica/Impeditiva").length;
+      const highCount = tickets.filter(t => t.urgencia === "Alta").length;
+      const medCount = tickets.filter(t => t.urgencia === "Média").length;
+      const lowCount = tickets.filter(t => t.urgencia === "Baixa").length;
+      const sevCount = critCount + highCount;
+      const critPct = total ? Number(((critCount * 100) / total).toFixed(2)) : 0;
+      const highPct = total ? Number(((highCount * 100) / total).toFixed(2)) : 0;
+      const sevPct = total ? (sevCount === total ? 100 : Number((critPct + highPct).toFixed(2))) : 0;
+
+      const cadenceMedian = median(allIntervals);
+      const cadenceMean = mean(allIntervals);
+      const recencyMedian = median(recencyDaysAll);
+      const recencyMean = mean(recencyDaysAll);
+
+      const platformMap = new Map();
+      tickets.forEach(t => {
+        if (!platformMap.has(t.servico)) {
+          platformMap.set(t.servico, { servico: t.servico, total: 0, "Crítica/Impeditiva": 0, "Alta": 0, "Média": 0, "Baixa": 0 });
+        }
+        const entry = platformMap.get(t.servico);
+        entry.total++;
+        entry[t.urgencia] = (entry[t.urgencia] || 0) + 1;
+      });
+      const platforms = [...platformMap.values()].sort((a, b) =>
+        b.total - a.total ||
+        (PLATFORM_PRIORITY[a.servico] || 99) - (PLATFORM_PRIORITY[b.servico] || 99) ||
+        a.servico.localeCompare(b.servico)
+      );
+
+      const recencyRanking = [...clientEntries].sort((a, b) => b.recencyDays - a.recencyDays || a.cliente.localeCompare(b.cliente));
+      const cadenceRanking = clientEntries
+        .filter(c => c.avgCadence !== null)
+        .sort((a, b) => a.avgCadence - b.avgCadence || a.cliente.localeCompare(b.cliente));
+
+      const agedWaiting = waitingTickets
+        .map(t => ({ ...t, ageDays: dayDiff(parseIsoDate(t.dataAbertura), refDate) }))
+        .filter(t => t.ageDays > 15)
+        .sort((a, b) => b.ageDays - a.ageDays || a.ticketId - b.ticketId);
+
+      return {
+        refDate, total, clientEntries, c3, c2, c1,
+        statusCounts, doneCount, donePct,
+        pendingCount: pendingTickets.length, pendingClientCount: pendingClients.size,
+        inProgressTickets, waitingCount: waitingTickets.length, pendingPct,
+        critCount, highCount, medCount, lowCount, sevCount,
+        critPct, highPct, sevPct,
+        cadenceMedian, cadenceMean, recencyMedian, recencyMean,
+        platforms, recencyRanking, cadenceRanking, agedWaiting
+      };
+    }
+
+    function populateSelects() {
+      const selCli = document.getElementById("filterCliente");
+      const selSvc = document.getElementById("filterServico");
+      const clients = [...new Set(EMBEDDED_TICKETS.map(t => t.cliente))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+      const services = [...new Set(EMBEDDED_TICKETS.map(t => t.servico))].sort((a, b) => (PLATFORM_PRIORITY[a] || 99) - (PLATFORM_PRIORITY[b] || 99) || a.localeCompare(b, "pt-BR"));
+
+      selCli.innerHTML = `<option value="ALL">Todos os Clientes (${clients.length})</option>` +
+        clients.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+
+      selSvc.innerHTML = `<option value="ALL">Todos os Serviços (${services.length})</option>` +
+        services.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+    }
+
+    function syncFilterInputs() {
+      document.getElementById("filterCliente").value = state.cliente;
+      document.getElementById("filterServico").value = state.servico;
+      document.getElementById("filterStatus").value = state.status;
+      document.getElementById("filterUrgencia").value = state.urgGroup === "HIGH_CRIT" ? "ALL" : state.urgencia;
+      document.getElementById("filterSearch").value = state.search;
+      document.getElementById("sortSelect").value = state.sort;
+      document.getElementById("refDateSelect").value = state.refMode;
+
+      document.querySelectorAll("#statusQuickPills .filter-pill").forEach(btn => {
+        const qs = btn.dataset.quickStatus;
+        const qu = btn.dataset.quickUrg;
+        let active = false;
+        if (qs === "ALL" && state.status === "ALL" && state.urgencia === "ALL" && state.urgGroup === "ALL") active = true;
+        if (qs === "PENDING" && state.status === "PENDING") active = true;
+        if (qs === "DONE" && state.status === "DONE") active = true;
+        if (qu === "HIGH_CRIT" && state.urgGroup === "HIGH_CRIT") active = true;
+        btn.classList.toggle("active", active);
+      });
+    }
+
+    function renderKpis(d) {
+      const inProgText = d.inProgressTickets.length === 1
+        ? `1 Em Atendimento na ${escapeHtml(d.inProgressTickets[0].cliente)}`
+        : `${d.inProgressTickets.length} Em Atendimento`;
+
+      const kpis = [
+        {
+          title: "Carteira Monitorada",
+          value: `${d.clientEntries.length} Cliente${d.clientEntries.length === 1 ? "" : "s"} PJ`,
+          sub: `${d.total} tickets analisados; ${d.c3} contas com 3 tickets, ${d.c2} com 2 tickets, ${d.c1} com 1 ticket`,
+          color: "#3B82F6",
+          bg: "rgba(59, 130, 246, 0.15)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`
+        },
+        {
+          title: "Taxa de Resolução Recente",
+          value: `${formatNumBr(d.donePct, 2)}% Concluídos`,
+          sub: `${d.doneCount} tickets: ${d.statusCounts["Resolvido"]} Resolvidos + ${d.statusCounts["Fechado"]} Fechados | ${d.statusCounts["Cancelado"]} Cancelados`,
+          color: "#10B981",
+          bg: "rgba(16, 185, 129, 0.15)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+        },
+        {
+          title: "Fila Ativa na Carteira",
+          value: `${d.pendingCount} Chamados Pendentes`,
+          sub: `${formatNumBr(d.pendingPct, 2)}% do total, distribuídos em ${d.pendingClientCount} cliente${d.pendingClientCount === 1 ? "" : "s"}: ${inProgText} e ${d.waitingCount} Aguardando`,
+          color: "#F59E0B",
+          bg: "rgba(245, 158, 11, 0.16)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`
+        },
+        {
+          title: "Índice de Severidade (Pressão N3)",
+          value: `${formatNumBr(d.sevPct, 2)}% Alta/Crítica`,
+          sub: `${d.sevCount} tickets: ${d.critCount} Crítica/Impeditiva [${formatNumBr(d.critPct, 2)}%] + ${d.highCount} Alta [${formatNumBr(d.highPct, 2)}%]`,
+          color: "#EF4444",
+          bg: "rgba(239, 68, 68, 0.16)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
+        },
+        {
+          title: "Cadência de Acionamento (Mediana)",
+          value: d.cadenceMedian === null ? "--" : `${formatNumBr(d.cadenceMedian, 1)} dias`,
+          sub: d.cadenceMedian === null
+            ? "Requer ao menos 2 tickets no mesmo cliente"
+            : `entre chamados do mesmo cliente (Média: ${formatNumBr(d.cadenceMean, 2)} dias)`,
+          color: "#06B6D4",
+          bg: "rgba(6, 182, 212, 0.16)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`
+        },
+        {
+          title: "Recência Média da Carteira (Pos. 1)",
+          value: d.recencyMedian === null ? "--" : `${Math.round(d.recencyMedian)} dias`,
+          sub: d.recencyMedian === null
+            ? "Sem clientes no recorte atual"
+            : `Mediana de ${Math.round(d.recencyMedian)} dias desde o último contato (Média: ${formatNumBr(d.recencyMean, 2)} dias)`,
+          color: "#C59217",
+          bg: "rgba(197, 146, 23, 0.18)",
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`
+        }
+      ];
+
+      document.getElementById("kpiGrid").innerHTML = kpis.map(k => `
+        <article class="kpi-card" style="--kpi-color:${k.color}; --kpi-bg:${k.bg};">
+          <div class="kpi-top">
+            <span class="kpi-title">${escapeHtml(k.title)}</span>
+            <div class="kpi-icon">${k.icon}</div>
+          </div>
+          <div class="kpi-value">${escapeHtml(k.value)}</div>
+          <div class="kpi-sub">${escapeHtml(k.sub)}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderChart1(d) {
+      const legendEl = document.getElementById("legendChart1");
+      legendEl.innerHTML = URGENCY_ORDER.map(u => {
+        const cnt = d.platforms.reduce((s, p) => s + (p[u] || 0), 0);
+        const activeCls = state.urgencia === u ? "active-filter" : "";
+        return `<span class="legend-item ${activeCls}" data-filter-urg="${escapeHtml(u)}"><span class="legend-swatch" style="background:${URGENCY_COLORS[u]}"></span>${escapeHtml(u)} (${cnt})</span>`;
+      }).join("");
+
+      const wrap = document.getElementById("wrapChart1");
+      if (typeof Chart !== "undefined") {
+        if (!wrap.querySelector("canvas")) wrap.innerHTML = '<canvas id="chartPlatform"></canvas>';
+        const ctx = document.getElementById("chartPlatform").getContext("2d");
+        if (charts.platform) charts.platform.destroy();
+
+        const labels = d.platforms.map(p => `${p.servico} (${p.total} · ${formatNumBr(d.total ? p.total * 100 / d.total : 0, 2)}%)`);
+        const datasets = URGENCY_ORDER.map(u => ({
+          label: u,
+          data: d.platforms.map(p => p[u] || 0),
+          backgroundColor: URGENCY_COLORS[u],
+          borderColor: "#111827",
+          borderWidth: 1,
+          borderRadius: 3,
+          maxBarThickness: 28
+        }));
+
+        charts.platform = new Chart(ctx, {
+          type: "bar",
+          data: { labels, datasets },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            onClick: (_, elems) => {
+              if (!elems.length) return;
+              const svc = d.platforms[elems[0].index].servico;
+              state.servico = state.servico === svc ? "ALL" : svc;
+              refreshAll();
+            },
+            scales: {
+              x: {
+                stacked: true,
+                grid: { color: "rgba(148,163,184,0.12)" },
+                ticks: { color: "#94A3B8", precision: 0 }
+              },
+              y: {
+                stacked: true,
+                grid: { display: false },
+                ticks: { autoSkip: false, color: "#E2E8F0", font: { weight: "600", size: 11.5 } }
+              }
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#070B14",
+                borderColor: "#334155",
+                borderWidth: 1,
+                titleColor: "#F1F5F9",
+                bodyColor: "#CBD5E1"
+              }
+            }
+          }
+        });
+      } else {
+        const maxVal = Math.max(1, ...d.platforms.map(p => p.total));
+        wrap.innerHTML = `<div class="svg-chart-wrap">` + d.platforms.map(p => {
+          const pct = d.total ? formatNumBr((p.total * 100) / d.total, 2) : "0,00";
+          const segs = URGENCY_ORDER.map(u => {
+            const c = p[u] || 0;
+            if (!c) return "";
+            const w = (c / maxVal) * 100;
+            return `<div data-filter-svc="${escapeHtml(p.servico)}" style="width:${w}%;background:${URGENCY_COLORS[u]};height:100%;cursor:pointer;" title="${escapeHtml(p.servico)} · ${escapeHtml(u)}: ${c}"></div>`;
+          }).join("");
+          return `
+            <div style="margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:4px;">
+                <span style="font-weight:700;color:#F1F5F9;cursor:pointer;" data-filter-svc="${escapeHtml(p.servico)}">${escapeHtml(p.servico)}</span>
+                <span style="color:#94A3B8;font-variant-numeric:tabular-nums;">${p.total} tickets (${pct}%)</span>
+              </div>
+              <div style="height:20px;background:#070B14;border-radius:6px;overflow:hidden;display:flex;border:1px solid #263248;">${segs}</div>
+            </div>`;
+        }).join("") + `</div>`;
+      }
+    }
+
+    function renderChart3(d) {
+      const order = ["Resolvido", "Fechado", "Aguardando", "Cancelado", "Em atendimento"];
+      const legendEl = document.getElementById("legendChart3");
+      legendEl.innerHTML = order.map(s => {
+        const activeCls = state.status === s ? "active-filter" : "";
+        return `
+          <span class="legend-item ${activeCls}" data-filter-status="${escapeHtml(s)}">
+            <span class="legend-swatch" style="background:${STATUS_COLORS[s]}"></span>
+            ${escapeHtml(s)} (${d.statusCounts[s] || 0})
+          </span>`;
+      }).join("");
+
+      const wrap = document.getElementById("wrapChart3");
+      if (typeof Chart !== "undefined") {
+        if (!wrap.querySelector("canvas")) wrap.innerHTML = '<canvas id="chartStatus"></canvas>';
+        const ctx = document.getElementById("chartStatus").getContext("2d");
+        if (charts.status) charts.status.destroy();
+
+        charts.status = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: order,
+            datasets: [{
+              data: order.map(s => d.statusCounts[s] || 0),
+              backgroundColor: order.map(s => STATUS_COLORS[s]),
+              borderColor: "#111827",
+              borderWidth: 3,
+              hoverOffset: 8
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "63%",
+            onClick: (_, elems) => {
+              if (!elems.length) return;
+              const s = order[elems[0].index];
+              state.status = state.status === s ? "ALL" : s;
+              refreshAll();
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#070B14",
+                borderColor: "#334155",
+                borderWidth: 1,
+                callbacks: {
+                  label: ctx => {
+                    const v = ctx.raw || 0;
+                    const pct = d.total ? formatNumBr((v * 100) / d.total, 2) : "0,00";
+                    return ` ${ctx.label}: ${v} (${pct}%)`;
+                  }
+                }
+              }
+            }
+          },
+          plugins: [{
+            id: "centerText",
+            afterDraw(chart) {
+              const { ctx, chartArea: { left, right, top, bottom } } = chart;
+              const cx = (left + right) / 2;
+              const cy = (top + bottom) / 2;
+              ctx.save();
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillStyle = "#FFFFFF";
+              ctx.font = "800 28px Segoe UI, sans-serif";
+              ctx.fillText(String(d.total), cx, cy - 10);
+              ctx.fillStyle = "#94A3B8";
+              ctx.font = "600 12px Segoe UI, sans-serif";
+              ctx.fillText(`${formatNumBr(d.donePct, 1)}% concl.`, cx, cy + 16);
+              ctx.restore();
+            }
+          }]
+        });
+      } else {
+        const total = Math.max(1, d.total);
+        let offset = 0;
+        const r = 72, cx = 110, cy = 110, circ = 2 * Math.PI * r;
+        const circles = order.map(s => {
+          const v = d.statusCounts[s] || 0;
+          if (!v) return "";
+          const dash = (v / total) * circ;
+          const el = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${STATUS_COLORS[s]}" stroke-width="28" stroke-dasharray="${dash} ${circ - dash}" stroke-dashoffset="${-offset}" style="cursor:pointer;" data-filter-status="${escapeHtml(s)}"><title>${escapeHtml(s)}: ${v}</title></circle>`;
+          offset += dash;
+          return el;
+        }).join("");
+        wrap.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:center;height:100%;">
+            <svg width="220" height="220" viewBox="0 0 220 220">
+              <g transform="rotate(-90 110 110)">${circles}</g>
+              <text x="110" y="104" text-anchor="middle" fill="#FFFFFF" font-size="28" font-weight="800">${d.total}</text>
+              <text x="110" y="128" text-anchor="middle" fill="#94A3B8" font-size="12" font-weight="600">${formatNumBr(d.donePct, 1)}% concl.</text>
+            </svg>
+          </div>`;
+      }
+    }
+
+    function renderChart2(d) {
+      const wrap = document.getElementById("wrapChart2");
+      const items = d.recencyRanking;
+
+      if (typeof Chart !== "undefined") {
+        if (!wrap.querySelector("canvas")) wrap.innerHTML = '<canvas id="chartRecency"></canvas>';
+        const ctx = document.getElementById("chartRecency").getContext("2d");
+        if (charts.recency) charts.recency.destroy();
+
+        charts.recency = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: items.map(c => `${c.shortName} (${c.recencyDays}d)`),
+            datasets: [{
+              label: "Dias desde último chamado",
+              data: items.map(c => c.recencyDays),
+              backgroundColor: items.map(c => getRecencyColor(c.recencyDays)),
+              borderRadius: 4,
+              maxBarThickness: 18
+            }]
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            onClick: (_, elems) => {
+              if (!elems.length) return;
+              const cli = items[elems[0].index].cliente;
+              state.cliente = state.cliente === cli ? "ALL" : cli;
+              refreshAll();
+            },
+            scales: {
+              x: {
+                grid: { color: "rgba(148,163,184,0.12)" },
+                ticks: { color: "#94A3B8" },
+                title: { display: true, text: "Dias sem abrir chamado (Posição 1)", color: "#94A3B8", font: { size: 11 } }
+              },
+              y: {
+                grid: { display: false },
+                ticks: { autoSkip: false, color: "#E2E8F0", font: { size: 10.8, weight: "600" } }
+              }
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#070B14",
+                borderColor: "#334155",
+                borderWidth: 1,
+                callbacks: {
+                  title: ctxArr => items[ctxArr[0].dataIndex].cliente,
+                  label: ctx => {
+                    const c = items[ctx.dataIndex];
+                    return [
+                      `Recência: ${c.recencyDays} dias`,
+                      `Último Ticket: #${c.latestTicket.ticketId} (${formatDateBr(c.latestTicket.dataAbertura)})`,
+                      `Serviço: ${c.latestTicket.servico} | Status: ${c.latestTicket.status}`,
+                      `Assunto: ${c.latestTicket.assunto}`
+                    ];
+                  }
+                }
+              }
+            }
+          }
+        });
+      } else {
+        const maxDays = Math.max(1, ...items.map(c => c.recencyDays));
+        wrap.innerHTML = `<div class="svg-chart-wrap">` + items.map(c => {
+          const w = Math.max(2, (c.recencyDays / maxDays) * 100);
+          const col = getRecencyColor(c.recencyDays);
+          return `
+            <div data-filter-client="${escapeHtml(c.cliente)}" style="display:grid;grid-template-columns:155px 1fr 48px;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:0.76rem;">
+              <span style="color:#E2E8F0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.shortName)}</span>
+              <div style="height:12px;background:#070B14;border-radius:4px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${col};border-radius:4px;"></div></div>
+              <span style="text-align:right;color:${col};font-weight:700;font-variant-numeric:tabular-nums;">${c.recencyDays}d</span>
+            </div>`;
+        }).join("") + `</div>`;
+      }
+    }
+
+    function renderChart4(d) {
+      const wrap = document.getElementById("wrapChart4");
+      const items = d.cadenceRanking;
+      document.getElementById("btnCadenceBar").classList.toggle("active", state.cadenceMode === "BAR");
+      document.getElementById("btnCadenceScatter").classList.toggle("active", state.cadenceMode === "SCATTER");
+
+      if (!items.length) {
+        if (charts.cadence) { charts.cadence.destroy(); charts.cadence = null; }
+        wrap.innerHTML = `<div class="empty-state" style="height:100%;display:flex;align-items:center;justify-content:center;">Sem clientes com 2+ tickets neste recorte para cálculo de cadência.</div>`;
+        return;
+      }
+
+      if (typeof Chart !== "undefined") {
+        if (!wrap.querySelector("canvas")) wrap.innerHTML = '<canvas id="chartCadence"></canvas>';
+        const ctx = document.getElementById("chartCadence").getContext("2d");
+        if (charts.cadence) charts.cadence.destroy();
+
+        if (state.cadenceMode === "BAR") {
+          charts.cadence = new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels: items.map(c => `${c.shortName} (${formatNumBr(c.avgCadence, 2)}d)`),
+              datasets: [{
+                label: "Intervalo médio entre chamados (dias)",
+                data: items.map(c => Number(c.avgCadence.toFixed(2))),
+                backgroundColor: items.map(c => getCadenceColor(c.avgCadence)),
+                borderRadius: 4,
+                maxBarThickness: 18
+              }]
+            },
+            options: {
+              indexAxis: "y",
+              responsive: true,
+              maintainAspectRatio: false,
+              onClick: (_, elems) => {
+                if (!elems.length) return;
+                const cli = items[elems[0].index].cliente;
+                state.cliente = state.cliente === cli ? "ALL" : cli;
+                refreshAll();
+              },
+              scales: {
+                x: {
+                  grid: { color: "rgba(148,163,184,0.12)" },
+                  ticks: { color: "#94A3B8" },
+                  title: { display: true, text: "Intervalo Médio (dias) — menor = maior pressão de rajada", color: "#94A3B8", font: { size: 11 } }
+                },
+                y: {
+                  grid: { display: false },
+                  ticks: { autoSkip: false, color: "#E2E8F0", font: { size: 10.8, weight: "600" } }
+                }
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  backgroundColor: "#070B14",
+                  borderColor: "#334155",
+                  borderWidth: 1,
+                  callbacks: {
+                    title: ctxArr => items[ctxArr[0].dataIndex].cliente,
+                    label: ctx => {
+                      const c = items[ctx.dataIndex];
+                      const segs = c.intervals.map((v, i) => `P${i + 1}→P${i + 2}: ${formatNumBr(v, 2)}d`).join(" | ");
+                      return [
+                        `Intervalo Médio: ${formatNumBr(c.avgCadence, 2)} dias`,
+                        `Sub-intervalos: ${segs}`,
+                        `Tickets no recorte: ${c.tickets.length}`
+                      ];
+                    }
+                  }
+                }
+              }
+            }
+          });
+        } else {
+          charts.cadence = new Chart(ctx, {
+            type: "scatter",
+            data: {
+              datasets: [{
+                label: "Clientes PJ",
+                data: items.map(c => ({
+                  x: Number(c.avgCadence.toFixed(2)),
+                  y: c.recencyDays,
+                  cliente: c.cliente,
+                  shortName: c.shortName,
+                  pending: c.pendingCount
+                })),
+                backgroundColor: items.map(c => getCadenceColor(c.avgCadence)),
+                borderColor: "#0B1120",
+                borderWidth: 1.5,
+                pointRadius: items.map(c => 6 + c.pendingCount * 2.5),
+                pointHoverRadius: 11
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              onClick: (_, elems) => {
+                if (!elems.length) return;
+                const cli = items[elems[0].index].cliente;
+                state.cliente = state.cliente === cli ? "ALL" : cli;
+                refreshAll();
+              },
+              scales: {
+                x: {
+                  grid: { color: "rgba(148,163,184,0.12)" },
+                  ticks: { color: "#94A3B8" },
+                  title: { display: true, text: "Cadência Média entre Chamados (dias)", color: "#94A3B8", font: { size: 11 } }
+                },
+                y: {
+                  grid: { color: "rgba(148,163,184,0.12)" },
+                  ticks: { color: "#94A3B8" },
+                  title: { display: true, text: "Recência Posição 1 (dias sem abrir chamado)", color: "#94A3B8", font: { size: 11 } }
+                }
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  backgroundColor: "#070B14",
+                  borderColor: "#334155",
+                  borderWidth: 1,
+                  callbacks: {
+                    label: ctx => {
+                      const p = ctx.raw;
+                      return [
+                        `${p.cliente}`,
+                        `Cadência Média: ${formatNumBr(p.x, 2)}d | Recência: ${p.y}d`,
+                        `Pendências ativas: ${p.pending}`
+                      ];
+                    }
+                  }
+                }
+              }
+            }
+          });
+        }
+      } else {
+        const maxCad = Math.max(1, ...items.map(c => c.avgCadence));
+        wrap.innerHTML = `<div class="svg-chart-wrap">` + items.map(c => {
+          const w = Math.max(2, (c.avgCadence / maxCad) * 100);
+          const col = getCadenceColor(c.avgCadence);
+          return `
+            <div data-filter-client="${escapeHtml(c.cliente)}" style="display:grid;grid-template-columns:155px 1fr 56px;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:0.76rem;">
+              <span style="color:#E2E8F0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.shortName)}</span>
+              <div style="height:12px;background:#070B14;border-radius:4px;overflow:hidden;"><div style="width:${w}%;height:100%;background:${col};border-radius:4px;"></div></div>
+              <span style="text-align:right;color:${col};font-weight:700;font-variant-numeric:tabular-nums;">${formatNumBr(c.avgCadence, 2)}d</span>
+            </div>`;
+        }).join("") + `</div>`;
+      }
+    }
+
+    function renderInsights(d) {
+      const chronicList = [];
+      for (const c of d.clientEntries) {
+        const svcGroups = new Map();
+        c.tickets.forEach(t => svcGroups.set(t.servico, (svcGroups.get(t.servico) || 0) + 1));
+        for (const [svc, cnt] of svcGroups.entries()) {
+          if (cnt === 3 && c.tickets.length === 3 && svc !== "EGUARDIAN") {
+            const pend = c.tickets.filter(t => isPendingStatus(t.status)).length;
+            const highAll = c.tickets.every(t => t.urgencia === "Alta" || t.urgencia === "Crítica/Impeditiva");
+            let detail = `${cnt}/3 chamados em <strong>${escapeHtml(svc)}</strong>`;
+            if (c.cliente === "Banco Arbi") detail += " (Alta) por processos/cadastros parados nas fases iniciais.";
+            else if (c.cliente === "Nomad") detail += " (Alta) sobre Sisbajud (AJUD308/309/310) e expiração de senha STA.";
+            else if (c.cliente === "Bnymellon") detail += ` (${pend} pendentes em Aguardando · #54279 e #54182).`;
+            else detail += ` (${pend} pendentes${highAll ? ", 100% Alta/Crítica" : ""}).`;
+
+            chronicList.push({
+              cliente: c.cliente,
+              tag: svc,
+              tagClass: pend > 0 ? "st-aguardando" : "urg-alta",
+              html: `<strong>${escapeHtml(c.cliente)}:</strong> ${detail}`
+            });
+          }
+        }
+      }
+
+      const ruleClients = d.clientEntries.filter(c =>
+        c.tickets.filter(t => t.servico === "EGUARDIAN" && /regra|alerta|mb21|mf65|c07|mb08|se05|se07/i.test(t.assunto)).length >= 2
+      );
+      const hasCm = ruleClients.some(c => c.cliente === "CM Capital");
+      const hasLib = ruleClients.some(c => c.cliente === "LIBERTY");
+      if (hasCm || hasLib) {
+        const targetClick = hasCm ? "CM Capital" : "LIBERTY";
+        chronicList.push({
+          cliente: targetClick,
+          tag: "EGUARDIAN · Regras",
+          tagClass: "urg-critica",
+          html: `<strong>${hasCm && hasLib ? "CM Capital e LIBERTY" : targetClick}:</strong> Reincidência em regras de monitoramento do e-Guardian (<code>MB21</code>/<code>MF65</code> na CM Capital e <code>C07</code> Crítica na LIBERTY).`
+        });
+      }
+
+      const agedByClient = [];
+      const seenAged = new Map();
+      d.agedWaiting.forEach(t => {
+        if (!seenAged.has(t.cliente)) {
+          seenAged.set(t.cliente, { cliente: t.cliente, maxDays: t.ageDays, tickets: [] });
+          agedByClient.push(seenAged.get(t.cliente));
+        }
+        seenAged.get(t.cliente).tickets.push(t);
+      });
+
+      const contractItems = [];
+      d.clientEntries.forEach(c => {
+        c.tickets.forEach(t => {
+          if (/cancelamento|desinstala/i.test(t.assunto)) {
+            contractItems.push({
+              cliente: c.cliente,
+              badge: `#${t.ticketId} · Cancelamento`,
+              badgeClass: "urg-critica",
+              html: `<strong>${escapeHtml(c.cliente)}:</strong> Ticket <code>#${t.ticketId}</code> (${formatDateBr(t.dataAbertura)}) registrado como <em>"${escapeHtml(t.assunto)}"</em>.`
+            });
+          } else if (/inativa[çc][ãa]o de cliente/i.test(t.assunto)) {
+            contractItems.push({
+              cliente: c.cliente,
+              badge: `#${t.ticketId} · ${c.recencyDays}d silencioso`,
+              badgeClass: "sem-red",
+              html: `<strong>${escapeHtml(c.cliente)}:</strong> Ticket <code>#${t.ticketId}</code> (<em>"${escapeHtml(t.assunto)}"</em>) — conta há <strong>${c.recencyDays}d</strong> sem novos chamados.`
+            });
+          }
+        });
+      });
+      const silentClients = d.recencyRanking.filter(c => c.recencyDays >= 80);
+      if (silentClients.length) {
+        contractItems.push({
+          cliente: silentClients[0].cliente,
+          badge: `${silentClients.length} contas ≥80d`,
+          badgeClass: "sem-red",
+          html: `<strong>Silenciosos Críticos (Risco Inatividade):</strong> ${silentClients.map(c => `${escapeHtml(c.shortName)} (<strong>${c.recencyDays}d</strong>)`).join(", ")}.`
+        });
+      }
+
+      document.getElementById("insightsGrid").innerHTML = `
+        <article class="insight-card">
+          <div class="insight-head">
+            <div class="insight-title-wrap">
+              <div class="insight-badge-icon" style="background:rgba(249,115,22,0.16);color:#FB923C;">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+              </div>
+              <h3>Reincidência Crônica por Produto</h3>
+            </div>
+            <span class="badge urg-alta">${chronicList.length} foco(s)</span>
+          </div>
+          <ul class="insight-list">
+            ${chronicList.length ? chronicList.map(item => `
+              <li class="insight-item" data-filter-client="${escapeHtml(item.cliente)}">
+                <div class="insight-row-top">
+                  <span class="badge ${item.tagClass}">${escapeHtml(item.tag)}</span>
+                  <span style="font-size:0.72rem;color:var(--muted);">Filtrar conta ↗</span>
+                </div>
+                <div>${item.html}</div>
+              </li>
+            `).join("") : `<li class="insight-item">Nenhuma reincidência crônica 3/3 detectada neste recorte.</li>`}
+          </ul>
+        </article>
+
+        <article class="insight-card">
+          <div class="insight-head">
+            <div class="insight-title-wrap">
+              <div class="insight-badge-icon" style="background:rgba(245,158,11,0.16);color:#FBBF24;">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <h3>Radar de Pendências Envelhecidas (&gt; 15d)</h3>
+            </div>
+            <span class="badge st-aguardando">${d.agedWaiting.length} ticket(s)</span>
+          </div>
+          <ul class="insight-list">
+            ${agedByClient.length ? agedByClient.map(g => `
+              <li class="insight-item" data-filter-client="${escapeHtml(g.cliente)}">
+                <div class="insight-row-top">
+                  <strong>${escapeHtml(g.cliente)} (${g.maxDays}d)</strong>
+                  <span class="badge st-aguardando">${g.tickets.length} Aguardando</span>
+                </div>
+                <div style="font-size:0.79rem;color:var(--muted);">
+                  ${g.tickets.map(t => `#${t.ticketId} · ${escapeHtml(t.servico)} (${escapeHtml(t.urgencia)}) — ${escapeHtml(t.assunto)}`).join("<br>")}
+                </div>
+              </li>
+            `).join("") : `<li class="insight-item">Nenhum ticket em Aguardando há mais de 15 dias neste recorte.</li>`}
+          </ul>
+        </article>
+
+        <article class="insight-card">
+          <div class="insight-head">
+            <div class="insight-title-wrap">
+              <div class="insight-badge-icon" style="background:rgba(239,68,68,0.16);color:#F87171;">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <h3>Alerta de Risco Contratual &amp; Silêncio</h3>
+            </div>
+            <span class="badge urg-critica">${contractItems.length} sinal(is)</span>
+          </div>
+          <ul class="insight-list">
+            ${contractItems.length ? contractItems.map(item => `
+              <li class="insight-item" data-filter-client="${escapeHtml(item.cliente)}">
+                <div class="insight-row-top">
+                  <span class="badge ${item.badgeClass}">${escapeHtml(item.badge)}</span>
+                  <span style="font-size:0.72rem;color:var(--muted);">Ver Raio-X ↗</span>
+                </div>
+                <div>${item.html}</div>
+              </li>
+            `).join("") : `<li class="insight-item">Nenhum risco contratual ou conta silenciosa ≥80d neste recorte.</li>`}
+          </ul>
+        </article>
+      `;
+    }
+
+    function sortClientEntries(entries) {
+      const copy = [...entries];
+      switch (state.sort) {
+        case "PENDING_FIRST":
+          return copy.sort((a, b) => b.pendingCount - a.pendingCount || b.recencyDays - a.recencyDays || a.cliente.localeCompare(b.cliente, "pt-BR"));
+        case "RECENCY_DESC":
+          return copy.sort((a, b) => b.recencyDays - a.recencyDays || a.cliente.localeCompare(b.cliente, "pt-BR"));
+        case "CADENCE_ASC":
+          return copy.sort((a, b) => (a.avgCadence ?? 9999) - (b.avgCadence ?? 9999) || a.cliente.localeCompare(b.cliente, "pt-BR"));
+        default:
+          return copy.sort((a, b) => a.cliente.localeCompare(b.cliente, "pt-BR"));
+      }
+    }
+
+    function renderTicketSlotHtml(t, posNum, refDate) {
+      if (!t) {
+        return `<div class="ticket-slot slot-empty">Sem registro na Posição ${posNum}</div>`;
+      }
+      const age = dayDiff(parseIsoDate(t.dataAbertura), refDate);
+      const pendingCls = isPendingStatus(t.status) ? "slot-pending" : "";
+      return `
+        <div class="ticket-slot ${pendingCls}">
+          <div class="slot-head">
+            <span class="pos-label">${posNum}º Último Ticket</span>
+            <span class="ticket-id">#${t.ticketId}</span>
+          </div>
+          <div class="slot-meta">
+            <span>${formatDateBr(t.dataAbertura)} · <strong>${age}d</strong></span>
+            <span class="svc-chip">${escapeHtml(t.servico)}</span>
+          </div>
+          <div class="slot-subject">${highlightText(t.assunto, state.search)}</div>
+          <div class="slot-badges">
+            <span class="badge ${getStatusBadgeClass(t.status)}">${escapeHtml(t.status)}</span>
+            <span class="badge ${getUrgencyBadgeClass(t.urgencia)}">${escapeHtml(t.urgencia)}</span>
+          </div>
+        </div>`;
+    }
+
+    function renderMatrix(d) {
+      const container = document.getElementById("matrixContainer");
+      const sortedClients = sortClientEntries(d.clientEntries);
+      document.getElementById("btnViewCards").classList.toggle("active", state.viewMode === "CARDS");
+      document.getElementById("btnViewTable").classList.toggle("active", state.viewMode === "TABLE");
+
+      if (!sortedClients.length) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <p style="margin:0 0 12px;font-size:1rem;color:#F1F5F9;font-weight:700;">Nenhum ticket encontrado com os filtros aplicados.</p>
+            <button type="button" class="btn btn-primary" data-reset-all="1">Restaurar Todos os 59 Tickets</button>
+          </div>`;
+        return;
+      }
+
+      if (state.viewMode === "CARDS") {
+        container.innerHTML = `<div class="matrix-list">` + sortedClients.map(c => {
+          const byPos = new Map(c.tickets.map(t => [t.posicao, t]));
+          const p1 = byPos.get(1) || null;
+          const p2 = byPos.get(2) || null;
+          const p3 = byPos.get(3) || null;
+
+          const cadText = c.avgCadence !== null ? `Cadência: ${formatNumBr(c.avgCadence, 2)}d` : "Ticket único";
+          return `
+            <article class="client-row-card ${c.hasContractRisk || c.recencyDays >= 80 ? "has-risk" : ""}">
+              <div class="client-row-head">
+                <div class="client-name-block">
+                  <h3 class="client-title">${highlightText(c.cliente, state.search)}</h3>
+                  <span class="pill-badge" style="padding:3px 9px;font-size:0.74rem;">${c.tickets.length} ticket(s)</span>
+                  ${c.hasContractRisk ? `<span class="badge urg-critica">Risco Contratual</span>` : ""}
+                </div>
+                <div class="client-metrics-pills">
+                  <span class="badge ${getRecencyClass(c.recencyDays)}">Recência: ${c.recencyDays}d</span>
+                  <span class="badge" style="background:rgba(6,182,212,0.12);color:#67E8F9;border-color:rgba(6,182,212,0.32);">${cadText}</span>
+                  ${c.pendingCount > 0 ? `<span class="badge st-aguardando">${c.pendingCount} pendente(s)</span>` : `<span class="badge st-resolvido">Sem pendências</span>`}
+                </div>
+              </div>
+              <div class="tickets-3col">
+                ${renderTicketSlotHtml(p1, 1, d.refDate)}
+                ${renderTicketSlotHtml(p2, 2, d.refDate)}
+                ${renderTicketSlotHtml(p3, 3, d.refDate)}
+              </div>
+            </article>`;
+        }).join("") + `</div>`;
+      } else {
+        container.innerHTML = `
+          <div class="table-card">
+            <table class="raiox-table">
+              <thead>
+                <tr>
+                  <th>Cliente PJ</th>
+                  <th>Recência (Pos. 1)</th>
+                  <th>Cadência Média</th>
+                  <th>Pendências</th>
+                  <th>1º Último</th>
+                  <th>2º Último</th>
+                  <th>3º Último</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedClients.map(c => {
+                  const byPos = new Map(c.tickets.map(t => [t.posicao, t]));
+                  const p1 = byPos.get(1), p2 = byPos.get(2), p3 = byPos.get(3);
+                  const isOpen = state.expandedClients.has(c.cliente);
+                  const cellSummary = t => t
+                    ? `<div><strong style="color:#93C5FD">#${t.ticketId}</strong> <span class="badge ${getStatusBadgeClass(t.status)}" style="padding:1px 6px;font-size:0.68rem;">${escapeHtml(t.status)}</span></div><div style="font-size:0.76rem;color:#CBD5E1;margin-top:2px;">${highlightText(t.assunto, state.search)}</div>`
+                    : `<span style="color:var(--muted);font-style:italic;">—</span>`;
+                  return `
+                    <tr class="client-summary-row" data-expand-client="${escapeHtml(c.cliente)}">
+                      <td><strong>${escapeHtml(c.cliente)}</strong><div style="font-size:0.73rem;color:var(--muted);">${isOpen ? "▼ Ocultar detalhes" : "▶ Expandir Raio-X"}</div></td>
+                      <td><span class="badge ${getRecencyClass(c.recencyDays)}">${c.recencyDays}d</span></td>
+                      <td>${c.avgCadence !== null ? formatNumBr(c.avgCadence, 2) + "d" : "—"}</td>
+                      <td>${c.pendingCount > 0 ? `<span class="badge st-aguardando">${c.pendingCount} aberto(s)</span>` : `<span class="badge st-resolvido">0</span>`}</td>
+                      <td>${cellSummary(p1)}</td>
+                      <td>${cellSummary(p2)}</td>
+                      <td>${cellSummary(p3)}</td>
+                    </tr>
+                    ${isOpen ? `
+                      <tr class="detail-row">
+                        <td colspan="7">
+                          <div class="tickets-3col">
+                            ${renderTicketSlotHtml(p1, 1, d.refDate)}
+                            ${renderTicketSlotHtml(p2, 2, d.refDate)}
+                            ${renderTicketSlotHtml(p3, 3, d.refDate)}
+                          </div>
+                        </td>
+                      </tr>` : ""}`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>`;
+      }
+    }
+
+    function resetAllFilters() {
+      state.cliente = "ALL";
+      state.servico = "ALL";
+      state.status = "ALL";
+      state.urgencia = "ALL";
+      state.urgGroup = "ALL";
+      state.search = "";
+      state.sort = "ALPHA";
+      refreshAll();
+    }
+
+    function refreshAll() {
+      syncFilterInputs();
+      const filtered = getFilteredTickets();
+      const dash = computeDashboardData(filtered);
+
+      const refLabel = state.refMode === "2026-11-15" ? "Corte: 15/11/2026" : `Corte: ${dash.refDate.toLocaleDateString("pt-BR")}`;
+      const activeParts = [];
+      if (state.cliente !== "ALL") activeParts.push(`Cliente: ${state.cliente}`);
+      if (state.servico !== "ALL") activeParts.push(`Serviço: ${state.servico}`);
+      if (state.status !== "ALL") activeParts.push(`Status: ${state.status === "PENDING" ? "Pendentes" : state.status === "DONE" ? "Concluídos" : state.status}`);
+      if (state.urgGroup === "HIGH_CRIT") activeParts.push("Urgência: Alta/Crítica");
+      else if (state.urgencia !== "ALL") activeParts.push(`Urgência: ${state.urgencia}`);
+      if (state.search.trim()) activeParts.push(`Busca: "${state.search.trim()}"`);
+
+      document.getElementById("dynamicSubtitle").textContent =
+        `Análise dos Últimos 3 Atendimentos por Cliente PJ | Responsável: Jefferson Gonçalves Cordeiro` +
+        (activeParts.length ? ` · Filtro ativo: ${activeParts.join(" | ")}` : "");
+      document.getElementById("scopePill").textContent = `${dash.clientEntries.length} Clientes PJ · ${dash.total} Tickets · ${refLabel}`;
+
+      renderKpis(dash);
+      renderChart1(dash);
+      renderChart3(dash);
+      renderChart2(dash);
+      renderChart4(dash);
+      renderInsights(dash);
+      renderMatrix(dash);
+    }
+
+    function exportFilteredCsv() {
+      const rows = getFilteredTickets();
+      const header = ["Cliente", "Posicao", "TicketId", "DataAbertura", "Servico", "Assunto", "Status", "Urgencia", "Equipe", "Analista"];
+      const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const lines = [header.join(";")].concat(
+        rows.map(r => [r.cliente, r.posicao, r.ticketId, r.dataAbertura.replace("T", " "), r.servico, r.assunto, r.status, r.urgencia, r.equipe, r.analista].map(esc).join(";"))
+      );
+      const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Carteira_Executiva_Advice_Top3.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      populateSelects();
+
+      document.getElementById("filterCliente").addEventListener("change", e => { state.cliente = e.target.value; refreshAll(); });
+      document.getElementById("filterServico").addEventListener("change", e => { state.servico = e.target.value; refreshAll(); });
+      document.getElementById("filterStatus").addEventListener("change", e => { state.status = e.target.value; refreshAll(); });
+      document.getElementById("filterUrgencia").addEventListener("change", e => { state.urgGroup = "ALL"; state.urgencia = e.target.value; refreshAll(); });
+      document.getElementById("filterSearch").addEventListener("input", e => { state.search = e.target.value; refreshAll(); });
+      document.getElementById("sortSelect").addEventListener("change", e => { state.sort = e.target.value; refreshAll(); });
+      document.getElementById("refDateSelect").addEventListener("change", e => { state.refMode = e.target.value; refreshAll(); });
+
+      document.getElementById("btnResetFilters").addEventListener("click", resetAllFilters);
+      document.getElementById("btnViewCards").addEventListener("click", () => { state.viewMode = "CARDS"; refreshAll(); });
+      document.getElementById("btnViewTable").addEventListener("click", () => { state.viewMode = "TABLE"; refreshAll(); });
+      document.getElementById("btnCadenceBar").addEventListener("click", () => { state.cadenceMode = "BAR"; refreshAll(); });
+      document.getElementById("btnCadenceScatter").addEventListener("click", () => { state.cadenceMode = "SCATTER"; refreshAll(); });
+      document.getElementById("btnExportCsv").addEventListener("click", exportFilteredCsv);
+      document.getElementById("btnPrint").addEventListener("click", () => window.print());
+
+      document.querySelectorAll("#statusQuickPills .filter-pill").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (btn.dataset.quickStatus === "ALL") {
+            state.status = "ALL";
+            state.urgencia = "ALL";
+            state.urgGroup = "ALL";
+          } else if (btn.dataset.quickStatus) {
+            state.status = btn.dataset.quickStatus;
+          } else if (btn.dataset.quickUrg === "HIGH_CRIT") {
+            state.urgGroup = state.urgGroup === "HIGH_CRIT" ? "ALL" : "HIGH_CRIT";
+            state.urgencia = "ALL";
+          }
+          refreshAll();
+        });
+      });
+
+      // Safe delegated click handlers for dynamically generated elements
+      document.body.addEventListener("click", ev => {
+        const cliEl = ev.target.closest("[data-filter-client]");
+        if (cliEl) {
+          const cli = cliEl.dataset.filterClient;
+          state.cliente = state.cliente === cli ? "ALL" : cli;
+          refreshAll();
+          document.getElementById("raioxSection").scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        const svcEl = ev.target.closest("[data-filter-svc]");
+        if (svcEl) {
+          const svc = svcEl.dataset.filterSvc;
+          state.servico = state.servico === svc ? "ALL" : svc;
+          refreshAll();
+          return;
+        }
+        const stEl = ev.target.closest("[data-filter-status]");
+        if (stEl) {
+          const st = stEl.dataset.filterStatus;
+          state.status = state.status === st ? "ALL" : st;
+          refreshAll();
+          return;
+        }
+        const urgEl = ev.target.closest("[data-filter-urg]");
+        if (urgEl) {
+          const u = urgEl.dataset.filterUrg;
+          state.urgGroup = "ALL";
+          state.urgencia = state.urgencia === u ? "ALL" : u;
+          refreshAll();
+          return;
+        }
+        const expEl = ev.target.closest("[data-expand-client]");
+        if (expEl) {
+          const cli = expEl.dataset.expandClient;
+          if (state.expandedClients.has(cli)) state.expandedClients.delete(cli);
+          else state.expandedClients.add(cli);
+          refreshAll();
+          return;
+        }
+        if (ev.target.closest("[data-reset-all]")) {
+          resetAllFilters();
+        }
+      });
+
+      refreshAll();
+    });
+  </script>
+</body>
+</html>

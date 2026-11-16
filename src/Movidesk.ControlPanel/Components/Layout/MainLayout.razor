@@ -1,6 +1,24 @@
 @inherits LayoutComponentBase
 
 <div class="app-shell">
+    <nav class="top-nav-bar" aria-label="Navegação do Painel Movidesk BI">
+        <div class="top-nav-inner">
+            <div class="nav-brand">
+                <span class="nav-brand-dot" aria-hidden="true"></span>
+                <span class="nav-brand-title">ADVICE COMPLIANCE SOLUTIONS</span>
+                <span class="nav-brand-sep">·</span>
+                <span class="nav-brand-sub">Movidesk BI</span>
+            </div>
+            <div class="nav-tabs" role="tablist">
+                <NavLink href="/" Match="NavLinkMatch.All" class="nav-tab">
+                    <span>Painel Operacional &amp; Superset</span>
+                </NavLink>
+                <NavLink href="/carteira-executiva" class="nav-tab">
+                    <span>Visão Executiva da Carteira (Top 3 por Cliente)</span>
+                </NavLink>
+            </div>
+        </div>
+    </nav>
     <main class="main-container">
         @Body
     </main>

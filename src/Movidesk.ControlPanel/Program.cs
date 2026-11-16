@@ -40,6 +40,7 @@ internal static class Program
         services.AddSingleton<SupersetService>();
         services.AddSingleton<DatabaseMonitorService>();
         services.AddSingleton<MovideskIngestionService>();
+        services.AddSingleton<CarteiraExecutivaService>();
 
         using var serviceProvider = services.BuildServiceProvider();
         using var mainForm = new MainForm(serviceProvider);
